@@ -11,6 +11,8 @@ from database import (
     save_order,
 )
 
+from product_management import ProductManagement
+
 
 class CafePOS:
     def __init__(self, root):
@@ -86,6 +88,12 @@ class CafePOS:
             controls,
             text="بستن صندوق",
             command=self.close_cashier
+        ).pack(side="right", padx=5)
+
+        ttk.Button(
+            controls,
+            text="مدیریت محصولات",
+            command=self.open_product_management
         ).pack(side="right", padx=5)
 
         # Main content
@@ -381,6 +389,12 @@ class CafePOS:
         if confirmed:
             close_cashier_session()
             self.update_status()
+
+    def open_product_management(self):
+        ProductManagement(
+            self.root,
+            on_close=self.load_products
+    )        
 
 
 if __name__ == "__main__":

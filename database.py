@@ -30,17 +30,49 @@ def create_products_table():
 
 
 def add_products(name, price):
-    connection = connect()
-    cursor = connection.cursor()
+    name = name.strip()
 
-    cursor.execute(
-        "INSERT INTO products (name, price) VALUES (?, ?)",
-        (name, price)
-    )
+    if not name:
+        raise ValueError("نام محصول نمی‌تواند خالی باشد.")
 
-    connection.commit()
-    connection.close()
+    if price <= 0:
+        raise ValueError("قیمت باید بیشتر از صفر باشد.")
 
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        # Check active products for the same name.
+        cursor.execute(
+            """
+            SELECT id
+            FROM products
+            WHERE LOWER(TRIM(name)) = LOWER(?)
+              AND is_active = 1
+            """,
+            (name,)
+        )
+
+        if cursor.fetchone() is not None:
+            raise ValueError("محصولی با این نام از قبل وجود دارد.")
+
+        cursor.execute(
+            """
+            INSERT INTO products (name, price)
+            VALUES (?, ?)
+            """,
+            (name, price)
+        )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
 
 
 
