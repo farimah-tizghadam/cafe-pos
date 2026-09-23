@@ -168,6 +168,34 @@ def create_order_items_table():
     connection.close()
 
 
+
+def  get_order_items(order_id):
+    connection = connect()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT 
+            products.name,
+            order_items.quantity,
+            order_items.price
+        FROM order_items
+        JOIN products 
+            ON order_items.product_id = products.id
+        JOIN orders
+            ON order_items.order_id = orders.id
+        WHERE orders.id = ?
+
+        """,
+        (order_id,)
+    )
+
+    items = cursor.fetchall()
+    connection.close()
+
+    return items
+
+
 def create_cashier_sessions_table():
     connection = connect()
     cursor = connection.cursor()
@@ -270,6 +298,27 @@ def close_cashier_session():
 
     print("cashier session closed successfully")
 
+
+def get_current_session_orders():
+    session_id = get_open_cashier_session()
+
+    if session_id is None:
+        return None
+
+    connection = connect()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT id, total, created_at FROM orders where session_id = ?
+        """,
+        (session_id,)
+    )
+
+    orders = cursor.fetchall()
+    connection.close()
+
+    return orders
 
 
 create_products_table()

@@ -6,7 +6,9 @@ from database import (
     open_cashier_session,
     close_cashier_session,
     get_open_cashier_session,
-    save_order
+    save_order,
+    get_current_session_orders,
+    get_order_items
     )
 
 
@@ -74,7 +76,8 @@ def cafe_management():
             f"4. Delete Product\n"
             f"5. Open Cashier\n"
             f"6. Close Cashier\n"
-            f"7. Exit\n"
+            f"7. show current sales\n"
+            f"8. Exit\n"
         )
 
 
@@ -194,6 +197,72 @@ def delete_existed_product():
             print("Delete cancelled")
 
 
+
+def show_current_sales():
+    orders = get_current_session_orders()
+
+    if orders is None:
+        print("No Open cashier session")
+        return
+
+    if not orders:
+        print("No sales in this cashier session yet.")
+        return
+    
+    total_sales = 0
+
+
+    print("\n---------Current Cashier Sales----------")
+
+    for order in orders:
+        order_id = order[0]
+        total = order[1]
+        created_at = order[2]
+
+        print(f"Order #{order_id} | {total:,} Toman | {created_at}")
+
+        items = get_order_items(order_id)
+
+        for item in items:
+            name, quantity, price = item
+            item_total = quantity * price
+
+            print(
+                f"{name} x{quantity} |"
+                f"{price:,} each | "
+                f"{item_total:,} Toman"
+            )
+
+        total_sales += total
+
+    print("----------------------------------------")
+    print(f"Total Sales {total_sales:,} Toman")
+
+
+def close_cashier_with_summery():
+    session_id = get_open_cashier_session()
+
+    if session_id is None:
+        print("NO open cashier session.")
+        return
+
+    orders = get_current_session_orders()
+    total_sales = sum(order[1] for order in orders)
+
+
+    print("\n------- Cashier Closing Summery -------")
+    print(f"Session ID: {session_id}")
+    print(f"Number of orders: {len(orders)}")
+    print(f"Total sales: {total_sales:,} Toman")
+    print("------------------------------------")
+
+    confirm = get_yes_no("Close tis cashier session? (yes/no): ")
+
+    if confirm == "yes":
+        close_cashier_session()
+    else:
+        print("Cashier closing cancelled.")
+
 def main():
 
     while True:   
@@ -220,9 +289,12 @@ def main():
             open_cashier_session()
 
         elif option == "6":
-            close_cashier_session()
+            close_cashier_with_summery()
 
         elif option == "7":
+            show_current_sales()
+
+        elif option == "8":
             print("exit")
             break
 
