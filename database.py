@@ -108,38 +108,85 @@ def create_order_table():
 
 
 def save_order(session_id, total, items):
-    connection = connect()
-    cursor = connection.cursor()
+    conn = connect()
 
-    created_at = datetime.now()
+    try:
+        cursor = conn.cursor()
 
-    cursor.execute(
-        """
-        INSERT INTO orders (session_id, total, created_at) VALUES (?, ?, ?)
+        # Start a database transaction.
+        cursor.execute("BEGIN")
 
-        """,
-        (session_id, total, created_at)
-    )
-
-    order_id = cursor.lastrowid
-
-    for item in items:
+        # Check that the cashier session is still open.
         cursor.execute(
             """
-            INSERT INTO order_items (order_id, product_id, quantity, price)
-            VALUES (?, ?, ?, ?)
+            SELECT id
+            FROM cashier_sessions
+            WHERE id = ? AND status = 1
             """,
-            (
-                order_id,
-                item["product_id"],
-                item["quantity"],
-                item["price"]
-            )
+            (session_id,)
         )
 
+        if cursor.fetchone() is None:
+            raise ValueError("Cashier session is closed.")
 
-    connection.commit()
-    connection.close()
+        if not items:
+            raise ValueError("Cannot save an empty order.")
+
+        # Calculate the total on the backend.
+        calculated_total = 0
+
+        for item in items:
+            quantity = item["quantity"]
+            price = item["price"]
+
+            if quantity <= 0 or price < 0:
+                raise ValueError("Invalid quantity or price.")
+
+            calculated_total += quantity * price
+
+        if calculated_total != total:
+            raise ValueError("Order total does not match.")
+
+        # Save the order.
+        cursor.execute(
+            """
+            INSERT INTO orders (session_id, total, created_at)
+            VALUES (?, ?, datetime('now', 'localtime'))
+            """,
+            (session_id, total)
+        )
+
+        order_id = cursor.lastrowid
+
+        # Save every item belonging to this order.
+        for item in items:
+            cursor.execute(
+                """
+                INSERT INTO order_items
+                    (order_id, product_id, quantity, price)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    item["product_id"],
+                    item["quantity"],
+                    item["price"]
+                )
+            )
+
+        # Save everything only after all operations succeed.
+        conn.commit()
+
+        return order_id
+
+    except Exception:
+        # Undo every change made during this transaction.
+        conn.rollback()
+        raise
+
+    finally:
+        # Close the connection whether saving succeeds or fails.
+        conn.close()
 
 def create_order_items_table():
     connection = connect()
