@@ -12,6 +12,7 @@ from database import (
 )
 
 from product_management import ProductManagement
+from sales_report import SalesReport
 
 
 class CafePOS:
@@ -94,6 +95,12 @@ class CafePOS:
             controls,
             text="مدیریت محصولات",
             command=self.open_product_management
+        ).pack(side="right", padx=5)
+
+        ttk.Button(
+            controls,
+            text="گزارش فروش",
+            command=self.open_sales_report
         ).pack(side="right", padx=5)
 
         # Main content
@@ -396,6 +403,8 @@ class CafePOS:
             on_close=self.load_products
     )        
 
+    def open_sales_report(self):
+        SalesReport(self.root)
 
 if __name__ == "__main__":
     root = tk.Tk()
