@@ -400,6 +400,42 @@ def get_current_session_orders():
     return orders
 
 
+def get_cashier_sessions():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, status, opened_at, closed_at
+            FROM cashier_sessions
+            ORDER BY id DESC
+            """
+        )
+        return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def get_session_orders(session_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, total, created_at
+            FROM orders
+            WHERE session_id = ?
+            ORDER BY id DESC
+
+            """,
+            (session_id,))
+        return cursor.fetchall()
+    finally:
+        conn.close()
+
+
 create_products_table()
 create_cashier_sessions_table()
 create_order_table()

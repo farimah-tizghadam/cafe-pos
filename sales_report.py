@@ -4,12 +4,14 @@ from tkinter import ttk, messagebox
 from database import (
     get_open_cashier_session,
     get_current_session_orders,
-    get_order_items
+    get_order_items,
+    get_cashier_sessions,
+    get_session_orders,
 )
 
 
 class SalesReport(tk.Toplevel):
-    
+
     def __init__(self, parent):
         super().__init__(parent)
 
@@ -21,15 +23,18 @@ class SalesReport(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
 
+        self.session_options = {}
+        self.selected_session_id = None
+
         self.build_interface()
         self.refresh_report()
-
+         
 
     def build_interface(self):
         # Title
         tk.Label(
             self,
-            text="گزارش فروش شیفت جاری",
+            text="گزارش فروش کافه",
             font=("Tahoma", 19, "bold"),
             bg="#f4f5f7",
             fg="#172554"
@@ -51,6 +56,35 @@ class SalesReport(tk.Toplevel):
             fg="#15803d"
         )
         self.summary_label.pack(pady=10)
+
+
+        # shift selector
+        selector_frame = tk.Frame(
+            self,
+            bg="#f4f5f7"
+        )
+        selector_frame.pack(pady=10)
+
+        tk.Label(
+            selector_frame,
+            text="انتخاب شیفت:",
+            font=("Tahoma", 11),
+            bg="#f4f5f7"
+        ).pack(side="right", padx=8)
+
+        self.session_combo = ttk.Combobox(
+            selector_frame,
+            state="readonly",
+            font=("Tahoma", 11),
+            width=45,
+            justify="right"
+        )
+        self.session_combo.pack(side="right")
+
+        self.session_combo.bind(
+            "<<ComboboxSelected>>",
+            self.on_session_selected
+        )
 
         # Orders table
         orders_frame = ttk.LabelFrame(
@@ -148,14 +182,77 @@ class SalesReport(tk.Toplevel):
             expand=True
         )
 
-        ttk.Button(
+        tk.Button(
             self,
             text="به‌روزرسانی گزارش",
-            command=self.refresh_report
+            command=self.refresh_report,
+            font=("Tahoma", 11),
+            bg="#e2e8f0",
+            fg="#172554",
+            padx=15,
+            pady=6
         ).pack(pady=12)
 
+        
+
     def refresh_report(self):
-        # Clear old information.
+        try:
+            sessions = get_cashier_sessions()
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"دریافت شیفت‌ها ناموفق بود:\n{error}",
+                parent=self
+            )
+            return
+
+        self.session_options = {}
+        labels = []
+
+        for session_id, status, opened_at, closed_at in sessions:
+            state = "باز" if status == 1 else "بسته"
+
+            label = (
+                f"شیفت {session_id} | {state}"
+                f" | شروع: {opened_at}"
+            )
+
+            labels.append(label)
+            self.session_options[label] = session_id
+
+        self.session_combo["values"] = labels
+
+        if not labels:
+            self.session_combo.set("")
+            self.selected_session_id = None
+            self.show_session_orders()
+            return
+
+        # Keep the selected shift when refreshing.
+        selected_label = next(
+            (
+                label
+                for label, session_id in self.session_options.items()
+                if session_id == self.selected_session_id
+            ),
+            labels[0]
+        )
+
+        self.session_combo.set(selected_label)
+        self.selected_session_id = self.session_options[selected_label]
+
+        self.show_session_orders()
+
+
+    def on_session_selected(self, event=None):
+        label = self.session_combo.get()
+
+        self.selected_session_id = self.session_options.get(label)
+
+        self.show_session_orders()
+
+
+    def show_session_orders(self):
         self.orders_table.delete(
             *self.orders_table.get_children()
         )
@@ -163,11 +260,9 @@ class SalesReport(tk.Toplevel):
             *self.details_table.get_children()
         )
 
-        session_id = get_open_cashier_session()
-
-        if session_id is None:
+        if self.selected_session_id is None:
             self.session_label.config(
-                text="در حال حاضر صندوق باز نیست."
+                text="هیچ شیفتی ثبت نشده است."
             )
             self.summary_label.config(
                 text="تعداد سفارش‌ها: ۰ | مجموع فروش: ۰ تومان"
@@ -175,22 +270,28 @@ class SalesReport(tk.Toplevel):
             return
 
         try:
-            orders = get_current_session_orders()
+            orders = get_session_orders(
+                self.selected_session_id
+            )
         except Exception as error:
             messagebox.showerror(
                 "خطا",
-                f"دریافت گزارش ناموفق بود:\n{error}",
+                f"دریافت سفارش‌ها ناموفق بود:\n{error}",
                 parent=self
             )
             return
 
-        total_sales = sum(
-            order[1] for order in orders
-        )
+        total_sales = sum(order[1] for order in orders)
 
-        self.session_label.config(
-            text=f"شماره شیفت: {session_id}"
-        )
+        if not orders:
+            self.session_label.config(
+                text=f"شیفت {self.selected_session_id} - سفارشی ثبت نشده است"
+            )
+        else:
+            self.session_label.config(
+                text=f"شماره شیفت: {self.selected_session_id}"
+            )
+
         self.summary_label.config(
             text=(
                 f"تعداد سفارش‌ها: {len(orders)}"
@@ -209,6 +310,7 @@ class SalesReport(tk.Toplevel):
                     created_at
                 )
             )
+
 
     def show_order_items(self, event=None):
         selected = self.orders_table.selection()
