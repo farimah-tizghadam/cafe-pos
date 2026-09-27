@@ -436,6 +436,25 @@ def get_session_orders(session_id):
         conn.close()
 
 
+def get_orders_by_date(start_date, end_date):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, total, created_at
+            FROM orders
+            WHERE created_at >= ?
+                AND created_at < date(?, '+1 day')
+            ORDER BY created_at DESC, id DESC
+            """,
+            (start_date, end_date)
+        )
+        return cursor.fetchall()
+    finally:
+        conn.close()
+
 create_products_table()
 create_cashier_sessions_table()
 create_order_table()

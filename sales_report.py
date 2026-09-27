@@ -7,7 +7,10 @@ from database import (
     get_order_items,
     get_cashier_sessions,
     get_session_orders,
+    get_orders_by_date,
 )
+
+from datetime import date
 
 
 class SalesReport(tk.Toplevel):
@@ -16,7 +19,7 @@ class SalesReport(tk.Toplevel):
         super().__init__(parent)
 
         self.title("گزارش فروش")
-        self.geometry("900x650")
+        self.geometry("900x750")
         self.minsize(750, 550)
         self.configure(bg="#f4f5f7")
 
@@ -25,6 +28,7 @@ class SalesReport(tk.Toplevel):
 
         self.session_options = {}
         self.selected_session_id = None
+        self.report_mode = "shift"
 
         self.build_interface()
         self.refresh_report()
@@ -85,6 +89,56 @@ class SalesReport(tk.Toplevel):
             "<<ComboboxSelected>>",
             self.on_session_selected
         )
+
+        #sort by date
+        
+        date_frame = tk.Frame(self, bg='#f4f5f7')
+        date_frame.pack(pady=10)
+
+        tk.Label(
+            date_frame,
+            text="از تاریخ:",
+            bg="#f4f5f7"
+        ).pack(side="right", padx=5)
+
+
+        self.start_date_entry = ttk.Entry(
+            date_frame,
+            width=14,
+            justify="center"
+        )
+
+        self.start_date_entry.pack(side="right", padx=5)
+        self.start_date_entry.insert(0, date.today().isoformat())
+
+        tk.Label(
+            date_frame,
+            text="تا تاریخ:",
+            bg="#f4f5f7"
+        ).pack(side="right", padx=5)
+
+        self.end_date_entry = ttk.Entry(
+            date_frame,
+            width=14,
+            justify="center"
+        )
+
+        self.end_date_entry.pack(side="right", padx=5)
+        self.end_date_entry.insert(0, date.today().isoformat())
+
+        ttk.Button(
+            date_frame,
+            text="نمایش گزارش تاریخ",
+            command=self.show_date_report
+        ).pack(side="right", padx=10)
+
+
+        ttk.Button(
+            date_frame,
+            text="نمایش گزارش شیفت",
+            command=self.show_selected_shift
+        ).pack(side="right", padx=10)
+        
 
         # Orders table
         orders_frame = ttk.LabelFrame(
@@ -195,7 +249,7 @@ class SalesReport(tk.Toplevel):
 
         
 
-    def refresh_report(self):
+    def refresh_shifts(self):
         try:
             sessions = get_cashier_sessions()
         except Exception as error:
@@ -245,6 +299,7 @@ class SalesReport(tk.Toplevel):
 
 
     def on_session_selected(self, event=None):
+        self.report_mode = "shift"
         label = self.session_combo.get()
 
         self.selected_session_id = self.session_options.get(label)
@@ -345,3 +400,102 @@ class SalesReport(tk.Toplevel):
                     f"{quantity * price:,}"
                 )
             )
+
+
+    def show_date_report(self):
+        start_text = self.start_date_entry.get().strip()
+        end_text = self.end_date_entry.get().strip()
+
+        try:
+            start = date.fromisoformat(start_text)
+            end = date.fromisoformat(end_text)
+
+        except ValueError:
+            messagebox.showerror(
+                "خطا",
+                "تاریخ را به صورت YYYY-MM-DD وارد کنید.",
+                parent=self
+            )
+            return
+
+        if start > end:
+            messagebox.showerror(
+                "خطا",
+                "تاریخ شروع نباید بعد از تاریخ پایان باشد.",
+                parent=self
+            )
+            return
+
+        try:
+            orders = get_orders_by_date(
+                start.isoformat(),
+                end.isoformat()
+            )
+
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"دریافت گزارش ناموفق بود:\n{error}",
+                parent=self
+            )
+            return
+
+        self.report_mode = "date"
+
+        self.orders_table.delete(
+            *self.orders_table.get_children()
+        )
+
+        self.details_table.delete(
+            *self.details_table.get_children()
+        )
+
+        total_sales = sum(order[1] for order in orders)
+
+        self.session_label.config(
+            text=f"گزارش از {start} تا {end}"
+        )
+
+        self.summary_label.config(
+            text=(
+                f"تعداد سفارش‌ها: {len(orders)} | "
+                f"مجموع فروش: {total_sales:,} تومان"
+            )
+        )
+
+        for order_id, total, created_at in orders:
+            self.orders_table.insert(
+                "",
+                tk.END,
+                iid=str(order_id),
+                values=(
+                    order_id,
+                    f"{total:,}",
+                    created_at
+                )
+            )
+             
+
+
+    def show_selected_shift(self):
+        label = self.session_combo.get()
+        session_id = self.session_options.get(label)
+
+        if session_id is None:
+            messagebox.showwarning(
+                "انتخاب شیفت",
+                "لطفاً ابتدا یک شیفت انتخاب کنید.",
+                parent=self
+            )
+            return
+
+        self.selected_session_id = session_id
+        self.report_mode = "shift"
+        self.show_session_orders()
+
+        
+    def refresh_report(self):
+        if self.report_mode == "date":
+            self.show_date_report()
+        else:
+            self.refresh_shifts()
