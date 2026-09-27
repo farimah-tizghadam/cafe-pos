@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
+import csv
 
 from database import (
     get_open_cashier_session,
@@ -235,6 +236,13 @@ class SalesReport(tk.Toplevel):
             fill="both",
             expand=True
         )
+
+
+        tk.Button(
+            self,
+            text="خروجی اکسل (CSV)",
+            command=self.export_csv
+        ).pack(pady=5)
 
         tk.Button(
             self,
@@ -492,6 +500,111 @@ class SalesReport(tk.Toplevel):
         self.selected_session_id = session_id
         self.report_mode = "shift"
         self.show_session_orders()
+
+
+    def export_csv(self):
+        order_rows = self.orders_table.get_children()
+
+        if not order_rows:
+            messagebox.showinfo(
+                "خروجی گزارش",
+                "سفارشی برای خروجی گرفتن وجود ندارد.",
+                parent=self
+            )
+            return
+
+        # Read the displayed orders and their historical product details.
+        export_rows = []
+
+        try:
+            for row_id in order_rows:
+                order_id, formatted_total, created_at = (
+                    self.orders_table.item(row_id, "values")
+                )
+
+                order_total = int(
+                    str(formatted_total).replace(",", "")
+                )
+
+                items = get_order_items(int(order_id))
+
+                if not items:
+                    export_rows.append([
+                        order_id,
+                        created_at,
+                        "",
+                        "",
+                        "",
+                        "",
+                        order_total
+                    ])
+                    continue
+
+                for index, (name, quantity, price) in enumerate(items):
+                    export_rows.append([
+                        order_id,
+                        created_at,
+                        name,
+                        quantity,
+                        price,
+                        quantity * price,
+                        order_total if index == 0 else ""
+                    ])
+
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"آماده‌سازی گزارش ناموفق بود:\n{error}",
+                parent=self
+            )
+            return
+
+        # Ask where to save the CSV file.
+        file_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="ذخیره گزارش فروش",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            initialfile="sales_report.csv"
+        )
+
+        if not file_path:
+            return
+
+        try:
+            with open(
+                file_path,
+                "w",
+                newline="",
+                encoding="utf-8-sig"
+            ) as file:
+                writer = csv.writer(file)
+
+                writer.writerow([
+                    "شماره سفارش",
+                    "زمان ثبت",
+                    "نام محصول",
+                    "تعداد",
+                    "قیمت واحد (تومان)",
+                    "مبلغ ردیف (تومان)",
+                    "جمع سفارش (تومان)"
+                ])
+
+                writer.writerows(export_rows)
+
+        except OSError as error:
+            messagebox.showerror(
+                "خطا",
+                f"ذخیره فایل ناموفق بود:\n{error}",
+                parent=self
+            )
+            return
+
+        messagebox.showinfo(
+            "خروجی گزارش",
+            "فایل گزارش با موفقیت ذخیره شد.",
+            parent=self
+        )
 
         
     def refresh_report(self):
