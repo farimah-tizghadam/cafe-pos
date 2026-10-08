@@ -139,7 +139,7 @@ def create_order_table():
 
 
 
-def save_order(session_id, total, items):
+def save_order(session_id, total, items, bill_id=None):
     conn = connect()
 
     try:
@@ -160,6 +160,22 @@ def save_order(session_id, total, items):
 
         if cursor.fetchone() is None:
             raise ValueError("Cashier session is closed.")
+
+        if bill_id is not None:
+            cursor.execute(
+                """
+                SELECT id 
+                FROM table_bills
+                WHERE id = ?
+                    AND status = 'open'
+                """, 
+                (bill_id,)
+            )
+
+            if cursor.fetchone() is None:
+                raise ValueError(
+                    "این صورتحساب وجود ندارد یا بسته شده است."
+                )
 
         if not items:
             raise ValueError("Cannot save an empty order.")
@@ -182,10 +198,15 @@ def save_order(session_id, total, items):
         # Save the order.
         cursor.execute(
             """
-            INSERT INTO orders (session_id, total, created_at)
-            VALUES (?, ?, datetime('now', 'localtime'))
+            INSERT INTO orders (
+                session_id, 
+                total, 
+                created_at,
+                bill_id
+            )
+            VALUES (?, ?, datetime('now', 'localtime'), ?)
             """,
-            (session_id, total)
+            (session_id, total, bill_id)
         )
 
         order_id = cursor.lastrowid
@@ -273,6 +294,40 @@ def  get_order_items(order_id):
     connection.close()
 
     return items
+
+
+
+def get_table_bill_items(bill_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                p.name,
+                SUM(oi.quantity) AS quantity,
+                oi.price
+            FROM orders AS o
+            JOIN order_items AS oi
+                ON oi.order_id = o.id
+            JOIN products AS p
+                ON p.id = oi.product_id
+            WHERE o.bill_id = ?
+            GROUP BY
+                p.id,
+                p.name,
+                oi.price
+            ORDER BY p.name
+            """,
+            (bill_id,)
+        )
+
+        return cursor.fetchall()
+
+    finally:
+        conn.close()
 
 
 def create_cashier_sessions_table():
@@ -389,7 +444,16 @@ def get_current_session_orders():
 
     cursor.execute(
         """
-        SELECT id, total, created_at FROM orders where session_id = ?
+        SELECT o.id, o.total, o.created_at 
+        FROM orders AS o
+        LEFT JOIN table_bills AS b
+            ON o.bill_id = b.id
+        WHERE o.session_id = ?
+          AND (
+                o.bill_id IS NULL
+                OR b.status = 'closed'
+              )
+        ORDER BY o.id
         """,
         (session_id,)
     )
@@ -422,16 +486,47 @@ def get_session_orders(session_id):
 
     try:
         cursor = conn.cursor()
+
         cursor.execute(
             """
-            SELECT id, total, created_at
-            FROM orders
-            WHERE session_id = ?
-            ORDER BY id DESC
+            SELECT
+                'order' AS sale_type,
+                o.id AS sale_id,
+                NULL AS table_name,
+                o.total AS total,
+                o.created_at AS sale_time
+            FROM orders AS o
+            WHERE o.session_id = ?
+              AND o.bill_id IS NULL
 
+            UNION ALL
+
+            SELECT
+                'table' AS sale_type,
+                b.id AS sale_id,
+                t.name AS table_name,
+                COALESCE(SUM(o.total), 0) AS total,
+                b.paid_at AS sale_time
+            FROM table_bills AS b
+            JOIN cafe_tables AS t
+                ON t.id = b.table_id
+            JOIN orders AS o
+                ON o.bill_id = b.id
+            WHERE b.status = 'closed'
+              AND b.paid_session_id = ?
+              AND b.paid_at IS NOT NULL
+            GROUP BY
+                b.id,
+                t.name,
+                b.paid_at
+
+            ORDER BY sale_time DESC
             """,
-            (session_id,))
+            (session_id, session_id)
+        )
+
         return cursor.fetchall()
+
     finally:
         conn.close()
 
@@ -441,21 +536,478 @@ def get_orders_by_date(start_date, end_date):
 
     try:
         cursor = conn.cursor()
+
         cursor.execute(
             """
-            SELECT id, total, created_at
-            FROM orders
-            WHERE created_at >= ?
-                AND created_at < date(?, '+1 day')
-            ORDER BY created_at DESC, id DESC
+            SELECT
+                'order' AS sale_type,
+                o.id AS sale_id,
+                NULL AS table_name,
+                o.total AS total,
+                o.created_at AS sale_time
+            FROM orders AS o
+            WHERE o.bill_id IS NULL
+              AND o.created_at >= ?
+              AND o.created_at < date(?, '+1 day')
+
+            UNION ALL
+
+            SELECT
+                'table' AS sale_type,
+                b.id AS sale_id,
+                t.name AS table_name,
+                COALESCE(SUM(o.total), 0) AS total,
+                b.paid_at AS sale_time
+            FROM table_bills AS b
+            JOIN cafe_tables AS t
+                ON t.id = b.table_id
+            JOIN orders AS o
+                ON o.bill_id = b.id
+            WHERE b.status = 'closed'
+              AND b.paid_at IS NOT NULL
+              AND b.paid_at >= ?
+              AND b.paid_at < date(?, '+1 day')
+            GROUP BY
+                b.id,
+                t.name,
+                b.paid_at
+
+            ORDER BY sale_time DESC
             """,
-            (start_date, end_date)
+            (
+                start_date,
+                end_date,
+                start_date,
+                end_date
+            )
         )
+
         return cursor.fetchall()
+
     finally:
         conn.close()
+
+
+def create_cafe_tables():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cafe_tables (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                is_active INTEGER NOT NULL DEFAULT 1
+                    CHECK (is_active IN (0, 1))
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS table_bills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open', 'closed')),
+                opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                closed_at TEXT,
+                FOREIGN KEY (table_id) REFERENCES cafe_tables(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS one_open_bill_per_table
+            ON table_bills(table_id)
+            WHERE status = 'open'
+        """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+
+
+def add_cafe_table(name):
+    name = name.strip()
+
+    if not name:
+        raise ValueError("نام میز نمی‌تواند خالی باشد.")
+
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO cafe_tables (name)
+            VALUES (?)
+        """, (name,))
+
+        conn.commit()
+        return cursor.lastrowid
+
+    finally:
+        conn.close()
+
+
+
+def get_cafe_tables():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                t.id,
+                t.name,
+                b.id AS open_bill_id
+            FROM cafe_tables AS t
+            LEFT JOIN table_bills AS b
+                ON b.table_id = t.id
+                AND b.status = 'open'
+            WHERE t.is_active = 1
+            ORDER BY t.id
+        """)
+
+        return cursor.fetchall()
+
+    finally:
+        conn.close()
+
+
+
+def open_table_bill(table_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("BEGIN")
+
+        cursor.execute("""
+            SELECT id
+            FROM cafe_tables
+            WHERE id = ? AND is_active = 1
+        """, (table_id,))
+
+        if cursor.fetchone() is None:
+            raise ValueError("این میز وجود ندارد یا غیرفعال است.")
+
+        cursor.execute("""
+            INSERT INTO table_bills (table_id)
+            VALUES (?)
+        """, (table_id,))
+
+        bill_id = cursor.lastrowid
+        conn.commit()
+
+        return bill_id
+
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise ValueError("این میز در حال حاضر صورتحساب باز دارد.")
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
+def cancel_empty_table_bill(bill_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN")
+
+        # Make sure the bill exists and is still open.
+        cursor.execute(
+            """
+            SELECT id
+            FROM table_bills
+            WHERE id = ?
+              AND status = 'open'
+            """,
+            (bill_id,)
+        )
+
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "صورتحساب وجود ندارد یا قبلاً بسته شده است."
+            )
+
+        # Never allow cancellation if an order was already added.
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM orders
+            WHERE bill_id = ?
+            """,
+            (bill_id,)
+        )
+
+        order_count = cursor.fetchone()[0]
+
+        if order_count > 0:
+            raise ValueError(
+                "صورتحساب دارای سفارش است و قابل لغو نیست."
+            )
+
+        cursor.execute(
+            """
+            DELETE FROM table_bills
+            WHERE id = ?
+              AND status = 'open'
+            """,
+            (bill_id,)
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "لغو صورتحساب ناموفق بود."
+            )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+def cancel_empty_table_bill(bill_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN")
+
+        # Make sure the bill exists and is still open.
+        cursor.execute(
+            """
+            SELECT id
+            FROM table_bills
+            WHERE id = ?
+              AND status = 'open'
+            """,
+            (bill_id,)
+        )
+
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "صورتحساب وجود ندارد یا قبلاً بسته شده است."
+            )
+
+        # Never allow cancellation if an order was already added.
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM orders
+            WHERE bill_id = ?
+            """,
+            (bill_id,)
+        )
+
+        order_count = cursor.fetchone()[0]
+
+        if order_count > 0:
+            raise ValueError(
+                "صورتحساب دارای سفارش است و قابل لغو نیست."
+            )
+
+        cursor.execute(
+            """
+            DELETE FROM table_bills
+            WHERE id = ?
+              AND status = 'open'
+            """,
+            (bill_id,)
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "لغو صورتحساب ناموفق بود."
+            )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
+def close_table_bill(bill_id, session_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN")
+
+        # Make sure the cashier session is still open.
+        cursor.execute(
+            """
+            SELECT id
+            FROM cashier_sessions
+            WHERE id = ?
+              AND status = 1
+            """,
+            (session_id,)
+        )
+
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "برای ثبت پرداخت، صندوق باید باز باشد."
+            )
+
+        # Close the bill and record payment information.
+        cursor.execute(
+            """
+            UPDATE table_bills
+            SET status = 'closed',
+                closed_at = datetime('now', 'localtime'),
+                paid_at = datetime('now', 'localtime'),
+                paid_session_id = ?
+            WHERE id = ?
+              AND status = 'open'
+            """,
+            (session_id, bill_id)
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "این صورتحساب وجود ندارد یا قبلاً بسته شده است."
+            )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
+
+def add_bill_id_to_orders():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "bill_id" not in columns:
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN bill_id INTEGER
+                    REFERENCES table_bills(id)
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+
+def add_payment_fields_to_table_bills():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(table_bills)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "paid_at" not in columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN paid_at TEXT
+            """)
+
+        if "paid_session_id" not in columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN paid_session_id INTEGER
+                    REFERENCES cashier_sessions(id)
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def get_table_bill_details(bill_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        # Check that the bill exists.
+        cursor.execute("""
+            SELECT
+                b.id,
+                t.name,
+                b.status,
+                b.opened_at
+            FROM table_bills AS b
+            JOIN cafe_tables AS t
+                ON t.id = b.table_id
+            WHERE b.id = ?
+        """, (bill_id,))
+
+        bill = cursor.fetchone()
+
+        if bill is None:
+            raise ValueError("صورتحساب پیدا نشد.")
+
+        # Retrieve every order belonging to this bill.
+        cursor.execute("""
+            SELECT id, total, created_at
+            FROM orders
+            WHERE bill_id = ?
+            ORDER BY id
+        """, (bill_id,))
+
+        orders = cursor.fetchall()
+
+        total = sum(order[1] for order in orders)
+
+        return {
+            "bill_id": bill[0],
+            "table_name": bill[1],
+            "status": bill[2],
+            "opened_at": bill[3],
+            "orders": orders,
+            "total": total
+        }
+
+    finally:
+        conn.close()
+
+
 
 create_products_table()
 create_cashier_sessions_table()
 create_order_table()
 create_order_items_table()
+create_cafe_tables()
+
+add_bill_id_to_orders()
+add_payment_fields_to_table_bills()

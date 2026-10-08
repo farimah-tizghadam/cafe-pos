@@ -9,6 +9,7 @@ from database import (
     get_cashier_sessions,
     get_session_orders,
     get_orders_by_date,
+    get_table_bill_items,
 )
 
 from datetime import date
@@ -163,7 +164,7 @@ class SalesReport(tk.Toplevel):
         )
 
         self.orders_table.heading(
-            "id", text="شماره سفارش"
+            "id", text="فروش"
         )
         self.orders_table.heading(
             "total", text="مبلغ (تومان)"
@@ -237,12 +238,32 @@ class SalesReport(tk.Toplevel):
             expand=True
         )
 
+        self.report_total_label = tk.Label(
+            details_frame,
+            text="مجموع فروش شیفت: ۰ تومان",
+            font=("Tahoma", 12, "bold"),
+            fg="#15803d"
+        )
+
+        self.report_total_label.pack(
+            pady=(10, 0)
+        )
+
+        buttons_frame = tk.Frame(
+            self,
+            bg="#f4f5f7"
+        )
+
+        buttons_frame.pack(pady=8)
 
         tk.Button(
             self,
             text="خروجی اکسل (CSV)",
             command=self.export_csv
-        ).pack(pady=5)
+        ).pack(
+            side="right",
+            padx=8
+        )
 
         tk.Button(
             self,
@@ -253,7 +274,10 @@ class SalesReport(tk.Toplevel):
             fg="#172554",
             padx=15,
             pady=6
-        ).pack(pady=12)
+        ).pack(
+            side="right",
+            padx=8
+        )
 
         
 
@@ -319,6 +343,7 @@ class SalesReport(tk.Toplevel):
         self.orders_table.delete(
             *self.orders_table.get_children()
         )
+
         self.details_table.delete(
             *self.details_table.get_children()
         )
@@ -328,27 +353,31 @@ class SalesReport(tk.Toplevel):
                 text="هیچ شیفتی ثبت نشده است."
             )
             self.summary_label.config(
-                text="تعداد سفارش‌ها: ۰ | مجموع فروش: ۰ تومان"
+                text="تعداد فروش‌ها: ۰ | مجموع فروش: ۰ تومان"
             )
             return
 
         try:
-            orders = get_session_orders(
+            sales = get_session_orders(
                 self.selected_session_id
             )
         except Exception as error:
             messagebox.showerror(
                 "خطا",
-                f"دریافت سفارش‌ها ناموفق بود:\n{error}",
+                f"دریافت فروش‌ها ناموفق بود:\n{error}",
                 parent=self
             )
             return
 
-        total_sales = sum(order[1] for order in orders)
-
-        if not orders:
+        # New database result:
+        # sale_type, sale_id, table_name, total, sale_time
+        total_sales = sum(sale[3] for sale in sales)
+        self.report_total_label.config(
+            text=f"مجموع فروش شیفت: {total_sales:,} تومان"
+        )
+        if not sales:
             self.session_label.config(
-                text=f"شیفت {self.selected_session_id} - سفارشی ثبت نشده است"
+                text=f"شیفت {self.selected_session_id} - فروشی ثبت نشده است"
             )
         else:
             self.session_label.config(
@@ -357,22 +386,31 @@ class SalesReport(tk.Toplevel):
 
         self.summary_label.config(
             text=(
-                f"تعداد سفارش‌ها: {len(orders)}"
+                f"تعداد فروش‌ها: {len(sales)}"
                 f" | مجموع فروش: {total_sales:,} تومان"
             )
         )
 
-        for order_id, total, created_at in orders:
+        for sale_type, sale_id, table_name, total, sale_time in sales:
+
+            if sale_type == "table":
+                display_id = f"{table_name} - صورتحساب {sale_id}"
+                row_id = f"table:{sale_id}"
+            else:
+                display_id = f"سفارش {sale_id}"
+                row_id = f"order:{sale_id}"
+
             self.orders_table.insert(
                 "",
                 tk.END,
-                iid=str(order_id),
+                iid=row_id,
                 values=(
-                    order_id,
+                    display_id,
                     f"{total:,}",
-                    created_at
+                    sale_time
                 )
             )
+
 
 
     def show_order_items(self, event=None):
@@ -385,10 +423,17 @@ class SalesReport(tk.Toplevel):
         if not selected:
             return
 
-        order_id = int(selected[0])
+        row_id = selected[0]
 
         try:
-            items = get_order_items(order_id)
+            sale_type, sale_id_text = row_id.split(":", 1)
+            sale_id = int(sale_id_text)
+
+            if sale_type == "table":
+                items = get_table_bill_items(sale_id)
+            else:
+                items = get_order_items(sale_id)
+
         except Exception as error:
             messagebox.showerror(
                 "خطا",
@@ -407,7 +452,7 @@ class SalesReport(tk.Toplevel):
                     f"{price:,}",
                     f"{quantity * price:,}"
                 )
-            )
+            )  
 
 
     def show_date_report(self):
@@ -435,7 +480,7 @@ class SalesReport(tk.Toplevel):
             return
 
         try:
-            orders = get_orders_by_date(
+            sales = get_orders_by_date(
                 start.isoformat(),
                 end.isoformat()
             )
@@ -458,7 +503,11 @@ class SalesReport(tk.Toplevel):
             *self.details_table.get_children()
         )
 
-        total_sales = sum(order[1] for order in orders)
+        total_sales = sum(sale[3] for sale in sales)
+
+        self.report_total_label.config(
+            text=f"مجموع فروش بازه: {total_sales:,} تومان"
+        )
 
         self.session_label.config(
             text=f"گزارش از {start} تا {end}"
@@ -466,20 +515,28 @@ class SalesReport(tk.Toplevel):
 
         self.summary_label.config(
             text=(
-                f"تعداد سفارش‌ها: {len(orders)} | "
+                f"تعداد فروش‌ها: {len(sales)} | "
                 f"مجموع فروش: {total_sales:,} تومان"
             )
         )
 
-        for order_id, total, created_at in orders:
+        for sale_type, sale_id, table_name, total, sale_time in sales:
+
+            if sale_type == "table":
+                display_id = f"{table_name} - صورتحساب {sale_id}"
+                row_id = f"table:{sale_id}"
+            else:
+                display_id = f"سفارش {sale_id}"
+                row_id = f"order:{sale_id}"
+
             self.orders_table.insert(
                 "",
                 tk.END,
-                iid=str(order_id),
+                iid=row_id,
                 values=(
-                    order_id,
+                    display_id,
                     f"{total:,}",
-                    created_at
+                    sale_time
                 )
             )
              
@@ -503,52 +560,57 @@ class SalesReport(tk.Toplevel):
 
 
     def export_csv(self):
-        order_rows = self.orders_table.get_children()
+        sale_rows = self.orders_table.get_children()
 
-        if not order_rows:
+        if not sale_rows:
             messagebox.showinfo(
                 "خروجی گزارش",
-                "سفارشی برای خروجی گرفتن وجود ندارد.",
+                "فروشی برای خروجی گرفتن وجود ندارد.",
                 parent=self
             )
             return
 
-        # Read the displayed orders and their historical product details.
         export_rows = []
 
         try:
-            for row_id in order_rows:
-                order_id, formatted_total, created_at = (
+            for row_id in sale_rows:
+                display_name, formatted_total, sale_time = (
                     self.orders_table.item(row_id, "values")
                 )
 
-                order_total = int(
+                sale_total = int(
                     str(formatted_total).replace(",", "")
                 )
 
-                items = get_order_items(int(order_id))
+                sale_type, sale_id_text = row_id.split(":", 1)
+                sale_id = int(sale_id_text)
+
+                if sale_type == "table":
+                    items = get_table_bill_items(sale_id)
+                else:
+                    items = get_order_items(sale_id)
 
                 if not items:
                     export_rows.append([
-                        order_id,
-                        created_at,
+                        display_name,
+                        sale_time,
                         "",
                         "",
                         "",
                         "",
-                        order_total
+                        sale_total
                     ])
                     continue
 
                 for index, (name, quantity, price) in enumerate(items):
                     export_rows.append([
-                        order_id,
-                        created_at,
+                        display_name,
+                        sale_time,
                         name,
                         quantity,
                         price,
                         quantity * price,
-                        order_total if index == 0 else ""
+                        sale_total if index == 0 else ""
                     ])
 
         except Exception as error:
@@ -559,7 +621,6 @@ class SalesReport(tk.Toplevel):
             )
             return
 
-        # Ask where to save the CSV file.
         file_path = filedialog.asksaveasfilename(
             parent=self,
             title="ذخیره گزارش فروش",
@@ -581,13 +642,13 @@ class SalesReport(tk.Toplevel):
                 writer = csv.writer(file)
 
                 writer.writerow([
-                    "شماره سفارش",
-                    "زمان ثبت",
+                    "فروش",
+                    "زمان فروش",
                     "نام محصول",
                     "تعداد",
                     "قیمت واحد (تومان)",
                     "مبلغ ردیف (تومان)",
-                    "جمع سفارش (تومان)"
+                    "جمع فروش (تومان)"
                 ])
 
                 writer.writerows(export_rows)

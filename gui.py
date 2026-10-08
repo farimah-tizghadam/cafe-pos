@@ -7,8 +7,15 @@ from database import (
     get_open_cashier_session,
     open_cashier_session,
     close_cashier_session,
-    get_current_session_orders,
+    get_session_orders,
     save_order,
+    get_cafe_tables,
+    get_table_bill_details,
+    open_table_bill,
+    close_table_bill,
+    get_order_items,
+    get_table_bill_items,
+    cancel_empty_table_bill,
 )
 
 from product_management import ProductManagement
@@ -24,6 +31,10 @@ class CafePOS:
 
         self.products = []
         self.cart = []
+
+        self.selected_table_id = None
+        self.selected_table_name = None
+        self.selected_bill_id = None
 
         self.setup_style()
         self.build_interface()
@@ -79,6 +90,16 @@ class CafePOS:
         )
         controls.pack(fill="x", padx=20, pady=15)
 
+        self.table_status_label = tk.Label(
+            controls,
+            text="نوع فروش: مستقیم",
+            bg="#f4f5f7",
+            fg="#172554",
+            font=("Tahoma", 11, "bold")
+        )
+
+        self.table_status_label.pack(side="left", padx=10)
+
         ttk.Button(
             controls,
             text="باز کردن صندوق",
@@ -102,6 +123,21 @@ class CafePOS:
             text="گزارش فروش",
             command=self.open_sales_report
         ).pack(side="right", padx=5)
+
+
+        ttk.Button(
+            controls,
+            text="میزها",
+            command=self.open_tables_window
+        ).pack(side="right", padx=5)
+
+
+        ttk.Button(
+            controls,
+            text="فروش مستقیم",
+            command=self.select_direct_sale
+        ).pack(side="right", padx=5)
+
 
         # Main content
         content = tk.Frame(
@@ -327,8 +363,14 @@ class CafePOS:
             for item in self.cart
         )
 
+        if self.selected_bill_id is None:
+            sale_destination = "فروش مستقیم"
+        else:
+            sale_destination = f"میز: {self.selected_table_name}"
+
         confirmed = messagebox.askyesno(
             "تأیید سفارش",
+            f"نوع فروش: {sale_destination}\n"
             f"مبلغ سفارش: {total:,} تومان\n\n"
             "آیا سفارش ثبت شود؟"
         )
@@ -337,7 +379,12 @@ class CafePOS:
             return
 
         try:
-            save_order(session_id, total, self.cart)
+            save_order(
+                session_id,
+                total,
+                self.cart,
+                bill_id=self.selected_bill_id
+            )
         except Exception as error:
             messagebox.showerror(
                 "خطا",
@@ -348,11 +395,29 @@ class CafePOS:
         self.cart.clear()
         self.refresh_cart()
 
-        messagebox.showinfo(
-            "ثبت موفق",
-            f"سفارش با موفقیت ثبت شد.\n"
-            f"مبلغ: {total:,} تومان"
-        )
+        if self.selected_bill_id is not None:
+            table_name = self.selected_table_name
+
+            self.selected_table_id = None
+            self.selected_table_name = None
+            self.selected_bill_id = None
+
+            self.table_status_label.config(
+                text="نوع فروش: مستقیم"
+            )
+
+            messagebox.showinfo(
+                "ثبت موفق",
+                f"سفارش {table_name} با موفقیت ثبت شد.\n"
+                f"مبلغ: {total:,} تومان\n\n"
+                "نوع فروش به فروش مستقیم تغییر کرد."
+            )
+        else:
+            messagebox.showinfo(
+                "ثبت موفق",
+                f"سفارش با موفقیت ثبت شد.\n"
+                f"مبلغ: {total:,} تومان"
+            )
 
     def open_cashier(self):
         if get_open_cashier_session() is not None:
@@ -382,20 +447,63 @@ class CafePOS:
             )
             return
 
-        orders = get_current_session_orders()
-        total = sum(order[1] for order in orders)
+        try:
+            sales = get_session_orders(session_id)
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"محاسبه فروش شیفت ناموفق بود:\n{error}"
+            )
+            return
+
+        total = sum(sale[3] for sale in sales)
+
+        # Find tables that still have an open bill.
+        tables = get_cafe_tables()
+
+        open_tables = [
+            table_name
+            for table_id, table_name, open_bill_id in tables
+            if open_bill_id is not None
+        ]
+
+        # Build the shift-closing message.
+        message = (
+            f"شماره شیفت: {session_id}\n"
+            f"تعداد فروش‌ها: {len(sales)}\n"
+            f"مجموع فروش: {total:,} تومان"
+        )
+
+        # Warn about unpaid table bills.
+        if open_tables:
+            table_names = "، ".join(open_tables)
+
+            message += (
+                f"\n\nصورتحساب باز: {len(open_tables)}"
+                f"\nمیزها: {table_names}"
+                "\nاین صورتحساب‌ها باز می‌مانند و به شیفت بعد منتقل می‌شوند."
+            )
+
+        message += "\n\nآیا صندوق بسته شود؟"
 
         confirmed = messagebox.askyesno(
             "گزارش پایان شیفت",
-            f"شماره شیفت: {session_id}\n"
-            f"تعداد سفارش‌ها: {len(orders)}\n"
-            f"مجموع فروش: {total:,} تومان\n\n"
-            "آیا صندوق بسته شود؟"
+            message
         )
 
-        if confirmed:
+        if not confirmed:
+            return
+
+        try:
             close_cashier_session()
-            self.update_status()
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"بستن صندوق ناموفق بود:\n{error}"
+            )
+            return
+
+        self.update_status()
 
     def open_product_management(self):
         ProductManagement(
@@ -405,6 +513,363 @@ class CafePOS:
 
     def open_sales_report(self):
         SalesReport(self.root)
+
+
+
+    def open_bill_details(self, table_id, table_name, bill_id, tables_window):
+        bill = get_table_bill_details(bill_id)
+
+        bill_window = tk.Toplevel(self.root)
+        bill_window.title(f"صورتحساب {table_name}")
+        bill_window.geometry("550x550")
+
+        tk.Label(
+            bill_window,
+            text=f"صورتحساب {table_name}",
+            font=("Tahoma", 18, "bold")
+        ).pack(pady=15)
+
+        orders_frame = tk.Frame(bill_window)
+        orders_frame.pack(
+            fill="both",
+            expand=True,
+            padx=20,
+            pady=10
+        )
+
+        items = get_table_bill_items(bill_id)
+
+        for product_name, quantity, price in items:
+            item_total = quantity * price
+
+            tk.Label(
+                orders_frame,
+                text=(
+                    f"{product_name} × {quantity}"
+                    f"   |   {item_total:,} تومان"
+                ),
+                font=("Tahoma", 12),
+                anchor="e"
+            ).pack(
+                fill="x",
+                pady=5
+            )
+
+        tk.Label(
+            bill_window,
+            text=f"مبلغ کل: {bill['total']:,} تومان",
+            font=("Tahoma", 15, "bold")
+        ).pack(pady=15)
+
+        ttk.Button(
+            bill_window,
+            text="انتخاب میز و افزودن سفارش",
+            command=lambda: self.select_table_from_bill(
+                table_id,
+                table_name,
+                bill_id,
+                bill_window,
+                tables_window
+            )
+        ).pack(
+            fill="x",
+            padx=20,
+            pady=5
+        )
+
+        ttk.Button(
+            bill_window,
+            text="پرداخت و بستن صورتحساب",
+            command=lambda: self.pay_bill_from_window(
+                bill_id,
+                bill_window,
+                tables_window
+            )
+        ).pack(
+            fill="x",
+            padx=20,
+            pady=5
+        )
+
+
+        if not bill["orders"]:
+            ttk.Button(
+                bill_window,
+                text="لغو صورتحساب خالی",
+                command=lambda: self.cancel_empty_bill_from_window(
+                    bill_id,
+                    bill_window,
+                    tables_window
+                )
+            ).pack(
+                fill="x",
+                padx=20,
+                pady=5
+            )
+    def cancel_empty_bill_from_window(
+        self,
+        bill_id,
+        bill_window,
+        tables_window
+    ):
+        confirmed = messagebox.askyesno(
+            "لغو صورتحساب",
+            "این صورتحساب خالی است.\n"
+            "آیا صورتحساب لغو و میز آزاد شود؟",
+            parent=bill_window
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            cancel_empty_table_bill(bill_id)
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"لغو صورتحساب ناموفق بود:\n{error}",
+                parent=bill_window
+            )
+            return
+
+        # If this bill is currently selected on the POS,
+        # return the POS to direct-sale mode.
+        if self.selected_bill_id == bill_id:
+            self.selected_table_id = None
+            self.selected_table_name = None
+            self.selected_bill_id = None
+
+            self.table_status_label.config(
+                text="نوع فروش: مستقیم"
+            )
+
+        bill_window.destroy()
+        tables_window.destroy()
+
+        messagebox.showinfo(
+            "لغو صورتحساب",
+            "صورتحساب خالی لغو شد و میز آزاد شد."
+        )
+            
+
+    def pay_bill_from_window(
+            self,
+            bill_id,
+            bill_window,
+            tables_window
+        ):
+            try:
+                bill = get_table_bill_details(bill_id)
+            except Exception as error:
+                messagebox.showerror(
+                    "خطا",
+                    f"دریافت صورتحساب ناموفق بود:\n{error}",
+                    parent=bill_window
+                )
+                return
+
+            if bill["status"] != "open":
+                messagebox.showwarning(
+                    "پرداخت",
+                    "این صورتحساب قبلاً بسته شده است.",
+                    parent=bill_window
+                )
+                return
+
+            if bill["total"] <= 0:
+                messagebox.showwarning(
+                    "پرداخت",
+                    "صورتحساب این میز خالی است.",
+                    parent=bill_window
+                )
+                return
+
+            confirmed = messagebox.askyesno(
+                "تأیید پرداخت",
+                f"میز: {bill['table_name']}\n"
+                f"مبلغ قابل پرداخت: {bill['total']:,} تومان\n\n"
+                "آیا پرداخت انجام شد؟",
+                parent=bill_window
+            )
+
+            if not confirmed:
+                return
+
+            session_id = get_open_cashier_session()
+
+            if session_id is None:
+                messagebox.showwarning(
+                    "پرداخت",
+                    "برای ثبت پرداخت ابتدا صندوق را باز کنید.",
+                    parent=bill_window
+                )
+                return
+            try:
+                close_table_bill(bill_id, session_id)
+            except Exception as error:
+                messagebox.showerror(
+                    "خطا",
+                    f"بستن صورتحساب ناموفق بود:\n{error}",
+                    parent=bill_window
+                )
+                return
+
+            # Clear the selected table if this is the currently selected bill.
+            if self.selected_bill_id == bill_id:
+                self.selected_table_id = None
+                self.selected_table_name = None
+                self.selected_bill_id = None
+
+                self.table_status_label.config(
+                    text="نوع فروش: مستقیم"
+                )
+
+            total = bill["total"]
+            table_name = bill["table_name"]
+
+            bill_window.destroy()
+            tables_window.destroy()
+
+            messagebox.showinfo(
+                "پرداخت موفق",
+                f"صورتحساب {table_name} بسته شد.\n"
+                f"مبلغ پرداخت‌شده: {total:,} تومان"
+            )
+
+
+    def select_table_from_bill(
+        self,
+        table_id,
+        table_name,
+        bill_id,
+        bill_window,
+        tables_window
+    ):
+        # Select the existing open bill.
+        self.selected_table_id = table_id
+        self.selected_table_name = table_name
+        self.selected_bill_id = bill_id
+
+        # Update the main POS screen.
+        self.table_status_label.config(
+            text=f"نوع فروش: میز | {table_name}"
+        )
+
+        # Close both table-related windows.
+        bill_window.destroy()
+        tables_window.destroy()
+
+
+    def select_table(self, table_id, table_name, bill_id, window):
+        # If the table is free, start a new bill for this customer group.
+        if bill_id is None:
+            try:
+                bill_id = open_table_bill(table_id)
+            except Exception as error:
+                messagebox.showerror(
+                    "خطا",
+                    f"صورتحساب میز باز نشد:\n{error}",
+                    parent=window
+                )
+                return
+
+        self.selected_table_id = table_id
+        self.selected_table_name = table_name
+        self.selected_bill_id = bill_id
+
+        self.table_status_label.config(
+            text=f"نوع فروش: میز | {table_name}"
+        )
+
+        window.destroy()
+
+
+
+    def select_direct_sale(self):
+        if self.cart:
+            messagebox.showwarning(
+                "سبد خرید",
+                "ابتدا سفارش فعلی را ثبت یا حذف کنید."
+            )
+            return
+
+        self.selected_table_id = None
+        self.selected_table_name = None
+        self.selected_bill_id = None
+
+        self.table_status_label.config(
+            text="نوع فروش: مستقیم"
+        )
+
+
+    def open_tables_window(self):
+        window = tk.Toplevel(self.root)
+        window.title("مدیریت میزها")
+        window.geometry("500x500")
+
+        title = tk.Label(
+            window,
+            text="میزهای کافه",
+            font=("Tahoma", 18, "bold")
+        )
+        title.pack(pady=15)
+
+        tables_frame = tk.Frame(window)
+        tables_frame.pack(
+            fill="both",
+            expand=True,
+            padx=20,
+            pady=10
+        )
+
+        tables = get_cafe_tables()
+
+        for table_id, table_name, open_bill_id in tables:
+
+            if open_bill_id is None:
+                status_text = "آزاد"
+
+                button_command = lambda tid=table_id, tname=table_name: (
+                    self.select_table(
+                        tid,
+                        tname,
+                        None,
+                        window
+                    )
+                )
+
+            else:
+                bill = get_table_bill_details(open_bill_id)
+                total = bill["total"]
+
+                if not bill["orders"]:
+                    status_text = "صورتحساب خالی"
+
+                else:
+                    status_text = (
+                        f"در حال استفاده\n"
+                        f"{total:,} تومان"
+                    )
+
+                button_command = lambda tid=table_id, tname=table_name, bid=open_bill_id: (
+                    self.open_bill_details(
+                        tid,
+                        tname,
+                        bid,
+                        window
+                    )
+                )
+
+            table_button = tk.Button(
+                tables_frame,
+                text=f"{table_name}\n{status_text}",
+                font=("Tahoma", 14),
+                width=18,
+                height=4,
+                command=button_command
+            )
+
+            table_button.pack(pady=8)
 
 if __name__ == "__main__":
     root = tk.Tk()
