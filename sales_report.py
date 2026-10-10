@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import csv
 
 from database import (
@@ -10,6 +10,10 @@ from database import (
     get_session_orders,
     get_orders_by_date,
     get_table_bill_items,
+    get_session_refund_total,
+    get_refund_total_by_date,
+    refund_direct_sale,
+    refund_table_bill,
 )
 
 from datetime import date
@@ -21,7 +25,7 @@ class SalesReport(tk.Toplevel):
         super().__init__(parent)
 
         self.title("گزارش فروش")
-        self.geometry("900x750")
+        self.geometry("950x850")
         self.minsize(750, 550)
         self.configure(bg="#f4f5f7")
 
@@ -141,6 +145,44 @@ class SalesReport(tk.Toplevel):
             command=self.show_selected_shift
         ).pack(side="right", padx=10)
         
+        action_frame = tk.Frame(
+            self,
+            bg="#f4f5f7"
+        )
+        action_frame.pack(pady=8)
+
+        self.refund_button = tk.Button(
+            action_frame,
+            text="بازپرداخت فروش",
+            command=self.refund_selected_sale,
+            font=("Tahoma", 11, "bold"),
+            bg="#fee2e2",
+            fg="#991b1b",
+            padx=15,
+            pady=6
+        )
+
+        self.refund_button.pack(side="right", pady=8)
+
+        tk.Button(
+            action_frame,
+            text="به‌روزرسانی گزارش",
+            command=self.refresh_report,
+            font=("Tahoma", 11),
+            bg="#e2e8f0",
+            fg="#172554",
+            padx=15,
+            pady=6
+        ).pack(side="right", padx=8)
+
+        tk.Button(
+            action_frame,
+            text="خروجی اکسل (CSV)",
+            command=self.export_csv,
+            font=("Tahoma", 11),
+            padx=15,
+            pady=6
+        ).pack(side="right", padx=8)
 
         # Orders table
         orders_frame = ttk.LabelFrame(
@@ -152,7 +194,7 @@ class SalesReport(tk.Toplevel):
             fill="both",
             expand=True,
             padx=20,
-            pady=8
+            pady=4
         )
 
         self.orders_table = ttk.Treeview(
@@ -160,7 +202,7 @@ class SalesReport(tk.Toplevel):
             columns=("id", "total", "created", "payment_method"),
             show="headings",
             selectmode="browse",
-            height=7
+            height=5
         )
 
         self.orders_table.heading(
@@ -209,7 +251,7 @@ class SalesReport(tk.Toplevel):
             fill="both",
             expand=True,
             padx=20,
-            pady=8
+            pady=4
         )
 
         self.details_table = ttk.Treeview(
@@ -221,7 +263,7 @@ class SalesReport(tk.Toplevel):
                 "subtotal"
             ),
             show="headings",
-            height=6
+            height=4
         )
 
         for key, title, width in (
@@ -262,28 +304,6 @@ class SalesReport(tk.Toplevel):
 
         buttons_frame.pack(pady=8)
 
-        tk.Button(
-            self,
-            text="خروجی اکسل (CSV)",
-            command=self.export_csv
-        ).pack(
-            side="right",
-            padx=8
-        )
-
-        tk.Button(
-            self,
-            text="به‌روزرسانی گزارش",
-            command=self.refresh_report,
-            font=("Tahoma", 11),
-            bg="#e2e8f0",
-            fg="#172554",
-            padx=15,
-            pady=6
-        ).pack(
-            side="right",
-            padx=8
-        )
 
         
 
@@ -379,6 +399,11 @@ class SalesReport(tk.Toplevel):
         # sale_type, sale_id, table_name, total, sale_time, payment_method
         total_sales = sum(sale[3] for sale in sales)
 
+        refund_total = get_session_refund_total(
+            self.selected_session_id
+        )
+        net_sales = total_sales - refund_total
+
         cash_total = sum(
             sale[3] for sale in sales
             if sale[5] == "cash"
@@ -396,10 +421,12 @@ class SalesReport(tk.Toplevel):
 
         self.report_total_label.config(
             text=(
-                f"مجموع فروش: {total_sales:,} تومان\n"
+                f"فروش ناخالص: {total_sales:,} تومان\n"
                 f"نقدی: {cash_total:,} | "
                 f"کارت: {card_total:,} | "
-                f"نامشخص: {unknown_total:,} تومان"
+                f"نامشخص: {unknown_total:,} تومان\n"
+                f"بازپرداخت‌ها: {refund_total:,} تومان\n"
+                f"فروش خالص: {net_sales:,} تومان"
             )
         )
 
@@ -541,6 +568,12 @@ class SalesReport(tk.Toplevel):
 
         total_sales = sum(sale[3] for sale in sales)
 
+        refund_total = get_refund_total_by_date(
+            start.isoformat(),
+            end.isoformat()
+        )
+        net_sales = total_sales - refund_total
+
         cash_total = sum(
             sale[3] for sale in sales
             if sale[5] == "cash"
@@ -558,10 +591,12 @@ class SalesReport(tk.Toplevel):
 
         self.report_total_label.config(
         text=(
-            f"مجموع فروش: {total_sales:,} تومان\n"
+            f"فروش ناخالص: {total_sales:,} تومان\n"
             f"نقدی: {cash_total:,} | "
             f"کارت: {card_total:,} | "
-            f"نامشخص: {unknown_total:,} تومان"
+            f"نامشخص: {unknown_total:,} تومان\n"
+            f"بازپرداخت‌ها: {refund_total:,} تومان\n"
+            f"فروش خالص: {net_sales:,} تومان"
         )
     )
 
@@ -731,6 +766,109 @@ class SalesReport(tk.Toplevel):
         messagebox.showinfo(
             "خروجی گزارش",
             "فایل گزارش با موفقیت ذخیره شد.",
+            parent=self
+        )
+
+
+    def refund_selected_sale(self):
+        selected = self.orders_table.selection()
+
+        if not selected:
+            messagebox.showwarning(
+                "انتخاب فروش",
+                "لطفاً ابتدا یک فروش را انتخاب کنید.",
+                parent=self
+            )
+            return
+
+        # A refund must belong to an open cashier shift.
+        try:
+            session = get_open_cashier_session()
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"بررسی وضعیت صندوق ناموفق بود:\n{error}",
+                parent=self
+            )
+            return
+
+        if session is None:
+            messagebox.showwarning(
+                "صندوق بسته است",
+                "برای بازپرداخت، ابتدا صندوق را باز کنید.",
+                parent=self
+            )
+            return
+
+        row_id = selected[0]
+        sale_type, sale_id_text = row_id.split(":", 1)
+        sale_id = int(sale_id_text)
+
+        values = self.orders_table.item(row_id, "values")
+        sale_name = values[0]
+        sale_amount = values[1]
+
+        reason = simpledialog.askstring(
+            "دلیل بازپرداخت",
+            (
+                f"فروش: {sale_name}\n"
+                f"مبلغ: {sale_amount} تومان\n\n"
+                "دلیل بازپرداخت را وارد کنید:"
+            ),
+            parent=self
+        )
+
+        # Cancel was pressed.
+        if reason is None:
+            return
+
+        reason = reason.strip()
+
+        if not reason:
+            messagebox.showwarning(
+                "دلیل بازپرداخت",
+                "وارد کردن دلیل بازپرداخت الزامی است.",
+                parent=self
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "تأیید بازپرداخت",
+            (
+                f"آیا از بازپرداخت کامل این فروش مطمئن هستید؟\n\n"
+                f"فروش: {sale_name}\n"
+                f"مبلغ: {sale_amount} تومان\n"
+                f"دلیل: {reason}\n\n"
+                "این عملیات قابل بازگشت نیست."
+            ),
+            icon="warning",
+            parent=self
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            if sale_type == "table":
+                refund_table_bill(sale_id, reason)
+            elif sale_type == "order":
+                refund_direct_sale(sale_id, reason)
+            else:
+                raise ValueError("نوع فروش نامعتبر است.")
+
+        except Exception as error:
+            messagebox.showerror(
+                "خطای بازپرداخت",
+                f"ثبت بازپرداخت ناموفق بود:\n{error}",
+                parent=self
+            )
+            return
+
+        self.refresh_report()
+
+        messagebox.showinfo(
+            "بازپرداخت موفق",
+            "بازپرداخت با موفقیت ثبت شد.",
             parent=self
         )
 

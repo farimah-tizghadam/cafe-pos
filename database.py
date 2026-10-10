@@ -7,6 +7,98 @@ def connect():
     return connection
 
 
+def get_session_refund_total(session_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM refunds
+            WHERE session_id = ?
+        """, (session_id,))
+
+        return cursor.fetchone()[0]
+
+    finally:
+        conn.close()
+
+
+def get_refund_total_by_date(start_date, end_date):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM refunds
+            WHERE refunded_at >= ?
+              AND refunded_at < date(?, '+1 day')
+        """, (start_date, end_date))
+
+        return cursor.fetchone()[0]
+
+    finally:
+        conn.close()
+
+
+def create_refunds_table():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS refunds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                order_id INTEGER,
+                bill_id INTEGER,
+
+                session_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL CHECK(amount > 0),
+
+                reason TEXT NOT NULL,
+                refunded_at TEXT NOT NULL,
+
+                FOREIGN KEY (order_id)
+                    REFERENCES orders(id),
+
+                FOREIGN KEY (bill_id)
+                    REFERENCES table_bills(id),
+
+                FOREIGN KEY (session_id)
+                    REFERENCES cashier_sessions(id),
+
+                CHECK (
+                    (order_id IS NOT NULL AND bill_id IS NULL)
+                    OR
+                    (order_id IS NULL AND bill_id IS NOT NULL)
+                )
+            )
+        """)
+
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                one_refund_per_direct_sale
+            ON refunds(order_id)
+            WHERE order_id IS NOT NULL
+        """)
+
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                one_refund_per_table_bill
+            ON refunds(bill_id)
+            WHERE bill_id IS NOT NULL
+        """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
 
 def create_products_table():
     connection = connect()
@@ -1013,6 +1105,250 @@ def add_payment_method_to_orders():
 
 
 
+def refund_direct_sale(order_id, reason):
+    reason = reason.strip()
+
+    if not reason:
+        raise ValueError("دلیل بازپرداخت نمی‌تواند خالی باشد.")
+
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        # Find the original direct sale.
+        cursor.execute("""
+            SELECT id, total, cancelled_at
+            FROM orders
+            WHERE id = ?
+              AND bill_id IS NULL
+        """, (order_id,))
+
+        sale = cursor.fetchone()
+
+        if sale is None:
+            raise ValueError("فروش مستقیم پیدا نشد.")
+
+        sale_id, amount, cancelled_at = sale
+
+        if cancelled_at is not None:
+            raise ValueError("این فروش قبلاً بازپرداخت شده است.")
+
+        # Find the currently open cashier shift.
+        cursor.execute("""
+            SELECT id
+            FROM cashier_sessions
+            WHERE status = 1
+        """)
+
+        session = cursor.fetchone()
+
+        if session is None:
+            raise ValueError(
+                "برای ثبت بازپرداخت، صندوق باید باز باشد."
+            )
+
+        refund_session_id = session[0]
+
+        # Record the refund in the current shift.
+        cursor.execute("""
+            INSERT INTO refunds (
+                order_id,
+                bill_id,
+                session_id,
+                amount,
+                reason,
+                refunded_at
+            )
+            VALUES (
+                ?, NULL, ?, ?, ?,
+                datetime('now', 'localtime')
+            )
+        """, (
+            sale_id,
+            refund_session_id,
+            amount,
+            reason
+        ))
+
+        # Mark the original sale as refunded.
+        cursor.execute("""
+            UPDATE orders
+            SET cancelled_at = datetime('now', 'localtime'),
+                cancellation_reason = ?
+            WHERE id = ?
+              AND cancelled_at IS NULL
+        """, (reason, sale_id))
+
+        if cursor.rowcount != 1:
+            raise ValueError("ثبت بازپرداخت ناموفق بود.")
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
+def refund_table_bill(bill_id, reason):
+    reason = reason.strip()
+
+    if not reason:
+        raise ValueError("دلیل بازپرداخت نمی‌تواند خالی باشد.")
+
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        # Only completed, paid table bills can be refunded.
+        cursor.execute("""
+            SELECT id, cancelled_at
+            FROM table_bills
+            WHERE id = ?
+              AND status = 'closed'
+              AND paid_at IS NOT NULL
+        """, (bill_id,))
+
+        bill = cursor.fetchone()
+
+        if bill is None:
+            raise ValueError("صورتحساب پرداخت‌شده پیدا نشد.")
+
+        if bill[1] is not None:
+            raise ValueError("این صورتحساب قبلاً بازپرداخت شده است.")
+
+        # Calculate the full bill amount from its order batches.
+        cursor.execute("""
+            SELECT COALESCE(SUM(total), 0)
+            FROM orders
+            WHERE bill_id = ?
+        """, (bill_id,))
+
+        amount = cursor.fetchone()[0]
+
+        if amount <= 0:
+            raise ValueError("مبلغ صورتحساب معتبر نیست.")
+
+        # Refunds belong to the currently open cashier shift.
+        cursor.execute("""
+            SELECT id
+            FROM cashier_sessions
+            WHERE status = 1
+        """)
+
+        session = cursor.fetchone()
+
+        if session is None:
+            raise ValueError(
+                "برای ثبت بازپرداخت، صندوق باید باز باشد."
+            )
+
+        refund_session_id = session[0]
+
+        cursor.execute("""
+            INSERT INTO refunds (
+                order_id,
+                bill_id,
+                session_id,
+                amount,
+                reason,
+                refunded_at
+            )
+            VALUES (
+                NULL, ?, ?, ?, ?,
+                datetime('now', 'localtime')
+            )
+        """, (
+            bill_id,
+            refund_session_id,
+            amount,
+            reason
+        ))
+
+        cursor.execute("""
+            UPDATE table_bills
+            SET cancelled_at = datetime('now', 'localtime'),
+                cancellation_reason = ?
+            WHERE id = ?
+              AND cancelled_at IS NULL
+        """, (reason, bill_id))
+
+        if cursor.rowcount != 1:
+            raise ValueError("ثبت بازپرداخت ناموفق بود.")
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
+def add_cancellation_fields_to_orders():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "cancelled_at" not in columns:
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN cancelled_at TEXT
+            """)
+
+        if "cancellation_reason" not in columns:
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN cancellation_reason TEXT
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+
+def add_cancellation_fields_to_table_bills():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(table_bills)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "cancelled_at" not in columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN cancelled_at TEXT
+            """)
+
+        if "cancellation_reason" not in columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN cancellation_reason TEXT
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
 create_products_table()
 create_cashier_sessions_table()
 create_order_table()
@@ -1023,3 +1359,7 @@ add_bill_id_to_orders()
 add_payment_fields_to_table_bills()
 add_payment_method_to_orders()
 add_payment_method_to_table_bills()
+add_cancellation_fields_to_orders()
+add_cancellation_fields_to_table_bills()
+
+create_refunds_table()
