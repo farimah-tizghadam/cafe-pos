@@ -139,7 +139,13 @@ def create_order_table():
 
 
 
-def save_order(session_id, total, items, bill_id=None):
+def save_order(
+        session_id,
+        total,
+        items,
+        bill_id=None,
+        payment_method=None
+    ):
     conn = connect()
 
     try:
@@ -177,6 +183,17 @@ def save_order(session_id, total, items, bill_id=None):
                     "این صورتحساب وجود ندارد یا بسته شده است."
                 )
 
+        if bill_id is None:
+            if payment_method not in ("cash", "card"):
+                raise ValueError(
+                    "روش پرداخت فروش مستقیم باید نقدی یا کارت باشد."
+                )
+        else:
+            if payment_method is not None:
+                raise ValueError(
+                     "روش پرداخت میز هنگام تسویه صورتحساب ثبت می‌شود."
+                )
+
         if not items:
             raise ValueError("Cannot save an empty order.")
 
@@ -202,11 +219,17 @@ def save_order(session_id, total, items, bill_id=None):
                 session_id, 
                 total, 
                 created_at,
-                bill_id
+                bill_id,
+                payment_method
             )
-            VALUES (?, ?, datetime('now', 'localtime'), ?)
+            VALUES (?, ?, datetime('now', 'localtime'), ?, ?)
             """,
-            (session_id, total, bill_id)
+            (
+                session_id,
+                total,
+                bill_id,
+                payment_method
+            )
         )
 
         order_id = cursor.lastrowid
@@ -494,7 +517,8 @@ def get_session_orders(session_id):
                 o.id AS sale_id,
                 NULL AS table_name,
                 o.total AS total,
-                o.created_at AS sale_time
+                o.created_at AS sale_time,
+                o.payment_method AS payment_method
             FROM orders AS o
             WHERE o.session_id = ?
               AND o.bill_id IS NULL
@@ -506,7 +530,8 @@ def get_session_orders(session_id):
                 b.id AS sale_id,
                 t.name AS table_name,
                 COALESCE(SUM(o.total), 0) AS total,
-                b.paid_at AS sale_time
+                b.paid_at AS sale_time,
+                b.payment_method AS payment_method
             FROM table_bills AS b
             JOIN cafe_tables AS t
                 ON t.id = b.table_id
@@ -544,7 +569,8 @@ def get_orders_by_date(start_date, end_date):
                 o.id AS sale_id,
                 NULL AS table_name,
                 o.total AS total,
-                o.created_at AS sale_time
+                o.created_at AS sale_time,
+                o.payment_method AS payment_method
             FROM orders AS o
             WHERE o.bill_id IS NULL
               AND o.created_at >= ?
@@ -557,7 +583,8 @@ def get_orders_by_date(start_date, end_date):
                 b.id AS sale_id,
                 t.name AS table_name,
                 COALESCE(SUM(o.total), 0) AS total,
-                b.paid_at AS sale_time
+                b.paid_at AS sale_time,
+                b.payment_method AS payment_method
             FROM table_bills AS b
             JOIN cafe_tables AS t
                 ON t.id = b.table_id
@@ -783,77 +810,16 @@ def cancel_empty_table_bill(bill_id):
         conn.close()
 
 
-def cancel_empty_table_bill(bill_id):
+
+def close_table_bill(bill_id, session_id, payment_method):
     conn = connect()
 
     try:
         cursor = conn.cursor()
         cursor.execute("BEGIN")
 
-        # Make sure the bill exists and is still open.
-        cursor.execute(
-            """
-            SELECT id
-            FROM table_bills
-            WHERE id = ?
-              AND status = 'open'
-            """,
-            (bill_id,)
-        )
-
-        if cursor.fetchone() is None:
-            raise ValueError(
-                "صورتحساب وجود ندارد یا قبلاً بسته شده است."
-            )
-
-        # Never allow cancellation if an order was already added.
-        cursor.execute(
-            """
-            SELECT COUNT(*)
-            FROM orders
-            WHERE bill_id = ?
-            """,
-            (bill_id,)
-        )
-
-        order_count = cursor.fetchone()[0]
-
-        if order_count > 0:
-            raise ValueError(
-                "صورتحساب دارای سفارش است و قابل لغو نیست."
-            )
-
-        cursor.execute(
-            """
-            DELETE FROM table_bills
-            WHERE id = ?
-              AND status = 'open'
-            """,
-            (bill_id,)
-        )
-
-        if cursor.rowcount != 1:
-            raise ValueError(
-                "لغو صورتحساب ناموفق بود."
-            )
-
-        conn.commit()
-
-    except Exception:
-        conn.rollback()
-        raise
-
-    finally:
-        conn.close()
-
-
-
-def close_table_bill(bill_id, session_id):
-    conn = connect()
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute("BEGIN")
+        if payment_method not in ("cash", "card"):
+            raise ValueError("روش پرداخت باید نقدی یا کارت باشد.")
 
         # Make sure the cashier session is still open.
         cursor.execute(
@@ -878,11 +844,12 @@ def close_table_bill(bill_id, session_id):
             SET status = 'closed',
                 closed_at = datetime('now', 'localtime'),
                 paid_at = datetime('now', 'localtime'),
-                paid_session_id = ?
+                paid_session_id = ?,
+                payment_method = ?
             WHERE id = ?
-              AND status = 'open'
+            AND status = 'open'
             """,
-            (session_id, bill_id)
+            (session_id, payment_method, bill_id)
         )
 
         if cursor.rowcount != 1:
@@ -953,6 +920,28 @@ def add_payment_fields_to_table_bills():
         conn.close()
 
 
+
+def add_payment_method_to_table_bills():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(table_bills)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "payment_method" not in columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN payment_method TEXT
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
 def get_table_bill_details(bill_id):
     conn = connect()
 
@@ -1002,6 +991,27 @@ def get_table_bill_details(bill_id):
         conn.close()
 
 
+def add_payment_method_to_orders():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "payment_method" not in columns:
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN payment_method TEXT
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
 
 create_products_table()
 create_cashier_sessions_table()
@@ -1011,3 +1021,5 @@ create_cafe_tables()
 
 add_bill_id_to_orders()
 add_payment_fields_to_table_bills()
+add_payment_method_to_orders()
+add_payment_method_to_table_bills()

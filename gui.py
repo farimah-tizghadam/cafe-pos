@@ -378,12 +378,64 @@ class CafePOS:
         if not confirmed:
             return
 
+
+        payment_method = None
+                    
+        if self.selected_bill_id is None:
+            payment_window = tk.Toplevel(self.root)
+            payment_window.title("روش پرداخت")
+            payment_window.geometry("300x170")
+            payment_window.transient(self.root)
+            payment_window.grab_set()
+
+            selected_method = tk.StringVar(value="card")
+
+            tk.Label(
+                payment_window,
+                text="روش پرداخت را انتخاب کنید:",
+                font=("Tahoma", 11)
+            ).pack(pady=10)
+
+            tk.Radiobutton(
+            payment_window,
+            text="کارت",
+            variable=selected_method,
+            value="card"
+            ).pack()
+
+            tk.Radiobutton(
+                payment_window,
+                text="نقدی",
+                variable=selected_method,
+                value="cash"
+            ).pack()
+
+            confirmed = {"value": False}
+
+            def confirm_payment():
+                confirmed["value"] = True
+                payment_window.destroy()
+
+            tk.Button(
+                payment_window,
+                text="تأیید",
+                command=confirm_payment
+            ).pack(pady=10)
+
+            self.root.wait_window(payment_window)
+
+            if not confirmed["value"]:
+                return
+
+            payment_method = selected_method.get()
+        
         try:
             save_order(
                 session_id,
                 total,
                 self.cart,
-                bill_id=self.selected_bill_id
+                bill_id=self.selected_bill_id,
+                payment_method=payment_method
             )
         except Exception as error:
             messagebox.showerror(
@@ -458,6 +510,21 @@ class CafePOS:
 
         total = sum(sale[3] for sale in sales)
 
+        cash_total = sum(
+            sale[3] for sale in sales
+            if sale[5] == "cash"
+        )
+
+        card_total = sum(
+            sale[3] for sale in sales
+            if sale[5] == "card"
+        )
+
+        unknown_total = sum(
+            sale[3] for sale in sales
+            if sale[5] not in ("cash", "card")
+        )
+
         # Find tables that still have an open bill.
         tables = get_cafe_tables()
 
@@ -471,7 +538,10 @@ class CafePOS:
         message = (
             f"شماره شیفت: {session_id}\n"
             f"تعداد فروش‌ها: {len(sales)}\n"
-            f"مجموع فروش: {total:,} تومان"
+            f"مجموع فروش: {total:,} تومان\n\n"
+            f"فروش نقدی: {cash_total:,} تومان\n"
+            f"فروش کارت: {card_total:,} تومان\n"
+            f"روش پرداخت نامشخص: {unknown_total:,} تومان"
         )
 
         # Warn about unpaid table bills.
@@ -704,8 +774,60 @@ class CafePOS:
                     parent=bill_window
                 )
                 return
+
+            payment_window = tk.Toplevel(bill_window)
+            payment_window.title("روش پرداخت")
+            payment_window.geometry("300x170")
+            payment_window.transient(bill_window)
+            payment_window.grab_set()
+
+            selected_method = tk.StringVar(value="card")
+
+            tk.Label(
+                payment_window,
+                text="روش پرداخت صورتحساب:",
+                font=("Tahoma", 11)
+            ).pack(pady=10)
+
+            tk.Radiobutton(
+                payment_window,
+                text="کارت",
+                variable=selected_method,
+                value="card"
+            ).pack()
+
+            tk.Radiobutton(
+                payment_window,
+                text="نقدی",
+                variable=selected_method,
+                value="cash"
+            ).pack()
+
+            confirmed_payment = {"value": False}
+
+            def confirm_payment_method():
+                confirmed_payment["value"] = True
+                payment_window.destroy()
+
+            tk.Button(
+                payment_window,
+                text="تأیید",
+                command=confirm_payment_method
+            ).pack(pady=10)
+
+            bill_window.wait_window(payment_window)
+
+            if not confirmed_payment["value"]:
+                return
+
+            payment_method = selected_method.get()
+
             try:
-                close_table_bill(bill_id, session_id)
+                close_table_bill(
+                    bill_id,
+                    session_id,
+                    payment_method
+                )
             except Exception as error:
                 messagebox.showerror(
                     "خطا",

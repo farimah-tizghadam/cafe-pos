@@ -157,7 +157,7 @@ class SalesReport(tk.Toplevel):
 
         self.orders_table = ttk.Treeview(
             orders_frame,
-            columns=("id", "total", "created"),
+            columns=("id", "total", "created", "payment_method"),
             show="headings",
             selectmode="browse",
             height=7
@@ -172,6 +172,9 @@ class SalesReport(tk.Toplevel):
         self.orders_table.heading(
             "created", text="زمان ثبت"
         )
+        self.orders_table.heading(
+            "payment_method", text="روش پرداخت"
+        )
 
         self.orders_table.column(
             "id", width=120, anchor="center"
@@ -181,6 +184,9 @@ class SalesReport(tk.Toplevel):
         )
         self.orders_table.column(
             "created", width=200, anchor="center"
+        )
+        self.orders_table.column(
+            "payment_method", width=110, anchor="center"
         )
 
         self.orders_table.pack(
@@ -370,11 +376,33 @@ class SalesReport(tk.Toplevel):
             return
 
         # New database result:
-        # sale_type, sale_id, table_name, total, sale_time
+        # sale_type, sale_id, table_name, total, sale_time, payment_method
         total_sales = sum(sale[3] for sale in sales)
-        self.report_total_label.config(
-            text=f"مجموع فروش شیفت: {total_sales:,} تومان"
+
+        cash_total = sum(
+            sale[3] for sale in sales
+            if sale[5] == "cash"
         )
+
+        card_total = sum(
+            sale[3] for sale in sales
+            if sale[5] == "card"
+        )
+
+        unknown_total = sum(
+            sale[3] for sale in sales
+            if sale[5] not in ("cash", "card")
+        )
+
+        self.report_total_label.config(
+            text=(
+                f"مجموع فروش: {total_sales:,} تومان\n"
+                f"نقدی: {cash_total:,} | "
+                f"کارت: {card_total:,} | "
+                f"نامشخص: {unknown_total:,} تومان"
+            )
+        )
+
         if not sales:
             self.session_label.config(
                 text=f"شیفت {self.selected_session_id} - فروشی ثبت نشده است"
@@ -391,7 +419,14 @@ class SalesReport(tk.Toplevel):
             )
         )
 
-        for sale_type, sale_id, table_name, total, sale_time in sales:
+        for sale_type, sale_id, table_name, total, sale_time, payment_method in sales:
+
+            if payment_method == "cash":
+                payment_text = "نقدی"
+            elif payment_method == "card":
+                payment_text = "کارت"
+            else:
+                payment_text = "نامشخص"
 
             if sale_type == "table":
                 display_id = f"{table_name} - صورتحساب {sale_id}"
@@ -407,7 +442,8 @@ class SalesReport(tk.Toplevel):
                 values=(
                     display_id,
                     f"{total:,}",
-                    sale_time
+                    sale_time,
+                    payment_text,
                 )
             )
 
@@ -505,9 +541,29 @@ class SalesReport(tk.Toplevel):
 
         total_sales = sum(sale[3] for sale in sales)
 
-        self.report_total_label.config(
-            text=f"مجموع فروش بازه: {total_sales:,} تومان"
+        cash_total = sum(
+            sale[3] for sale in sales
+            if sale[5] == "cash"
         )
+
+        card_total = sum(
+            sale[3] for sale in sales
+            if sale[5] == "card"
+        )
+
+        unknown_total = sum(
+            sale[3] for sale in sales
+            if sale[5] not in ("cash", "card")
+        )
+
+        self.report_total_label.config(
+        text=(
+            f"مجموع فروش: {total_sales:,} تومان\n"
+            f"نقدی: {cash_total:,} | "
+            f"کارت: {card_total:,} | "
+            f"نامشخص: {unknown_total:,} تومان"
+        )
+    )
 
         self.session_label.config(
             text=f"گزارش از {start} تا {end}"
@@ -520,8 +576,15 @@ class SalesReport(tk.Toplevel):
             )
         )
 
-        for sale_type, sale_id, table_name, total, sale_time in sales:
+        for sale_type, sale_id, table_name, total, sale_time, payment_method in sales:
 
+            if payment_method == "cash":
+                payment_text = "نقدی"
+            elif payment_method == "card":
+                payment_text = "کارت"
+            else:
+                payment_text = "نامشخص"
+            
             if sale_type == "table":
                 display_id = f"{table_name} - صورتحساب {sale_id}"
                 row_id = f"table:{sale_id}"
@@ -536,7 +599,8 @@ class SalesReport(tk.Toplevel):
                 values=(
                     display_id,
                     f"{total:,}",
-                    sale_time
+                    sale_time,
+                    payment_text,
                 )
             )
              
@@ -574,7 +638,7 @@ class SalesReport(tk.Toplevel):
 
         try:
             for row_id in sale_rows:
-                display_name, formatted_total, sale_time = (
+                display_name, formatted_total, sale_time, payment_text = (
                     self.orders_table.item(row_id, "values")
                 )
 
@@ -594,6 +658,7 @@ class SalesReport(tk.Toplevel):
                     export_rows.append([
                         display_name,
                         sale_time,
+                        payment_text,
                         "",
                         "",
                         "",
@@ -606,6 +671,7 @@ class SalesReport(tk.Toplevel):
                     export_rows.append([
                         display_name,
                         sale_time,
+                        payment_text,
                         name,
                         quantity,
                         price,
@@ -644,6 +710,7 @@ class SalesReport(tk.Toplevel):
                 writer.writerow([
                     "فروش",
                     "زمان فروش",
+                    "روش پرداخت",
                     "نام محصول",
                     "تعداد",
                     "قیمت واحد (تومان)",
