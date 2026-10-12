@@ -14,6 +14,7 @@ from database import (
     get_refund_total_by_date,
     refund_direct_sale,
     refund_table_bill,
+    is_sale_refunded,
 )
 
 from datetime import date
@@ -199,7 +200,7 @@ class SalesReport(tk.Toplevel):
 
         self.orders_table = ttk.Treeview(
             orders_frame,
-            columns=("id", "total", "created", "payment_method"),
+            columns=("id", "total", "created", "payment_method", "status"),
             show="headings",
             selectmode="browse",
             height=5
@@ -217,6 +218,9 @@ class SalesReport(tk.Toplevel):
         self.orders_table.heading(
             "payment_method", text="روش پرداخت"
         )
+        self.orders_table.heading(
+            "status", text="وضعیت"
+        )
 
         self.orders_table.column(
             "id", width=120, anchor="center"
@@ -229,6 +233,9 @@ class SalesReport(tk.Toplevel):
         )
         self.orders_table.column(
             "payment_method", width=110, anchor="center"
+        )
+        self.orders_table.column(
+            "status", width=130, anchor="center"
         )
 
         self.orders_table.pack(
@@ -462,6 +469,9 @@ class SalesReport(tk.Toplevel):
                 display_id = f"سفارش {sale_id}"
                 row_id = f"order:{sale_id}"
 
+            refunded = is_sale_refunded(sale_type, sale_id)
+            status_text = "بازپرداخت‌شده" if refunded else "پرداخت‌شده"
+
             self.orders_table.insert(
                 "",
                 tk.END,
@@ -471,6 +481,7 @@ class SalesReport(tk.Toplevel):
                     f"{total:,}",
                     sale_time,
                     payment_text,
+                    status_text,
                 )
             )
 
@@ -627,6 +638,9 @@ class SalesReport(tk.Toplevel):
                 display_id = f"سفارش {sale_id}"
                 row_id = f"order:{sale_id}"
 
+            refunded = is_sale_refunded(sale_type, sale_id)
+            status_text = "بازپرداخت‌شده" if refunded else "پرداخت‌شده"
+
             self.orders_table.insert(
                 "",
                 tk.END,
@@ -636,6 +650,7 @@ class SalesReport(tk.Toplevel):
                     f"{total:,}",
                     sale_time,
                     payment_text,
+                    status_text,
                 )
             )
              
@@ -673,7 +688,7 @@ class SalesReport(tk.Toplevel):
 
         try:
             for row_id in sale_rows:
-                display_name, formatted_total, sale_time, payment_text = (
+                display_name, formatted_total, sale_time, payment_text, status_text = (
                     self.orders_table.item(row_id, "values")
                 )
 
@@ -694,6 +709,7 @@ class SalesReport(tk.Toplevel):
                         display_name,
                         sale_time,
                         payment_text,
+                        status_text,
                         "",
                         "",
                         "",
@@ -707,6 +723,7 @@ class SalesReport(tk.Toplevel):
                         display_name,
                         sale_time,
                         payment_text,
+                        status_text,
                         name,
                         quantity,
                         price,
@@ -746,6 +763,7 @@ class SalesReport(tk.Toplevel):
                     "فروش",
                     "زمان فروش",
                     "روش پرداخت",
+                    "وضعیت",
                     "نام محصول",
                     "تعداد",
                     "قیمت واحد (تومان)",
@@ -807,6 +825,14 @@ class SalesReport(tk.Toplevel):
         values = self.orders_table.item(row_id, "values")
         sale_name = values[0]
         sale_amount = values[1]
+
+        if values[4] == "بازپرداخت‌شده":
+            messagebox.showwarning(
+                "بازپرداخت تکراری",
+                "این فروش قبلاً بازپرداخت شده است.",
+                parent=self
+            )
+            return
 
         reason = simpledialog.askstring(
             "دلیل بازپرداخت",

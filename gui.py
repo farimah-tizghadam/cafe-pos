@@ -8,6 +8,7 @@ from database import (
     open_cashier_session,
     close_cashier_session,
     get_session_orders,
+    get_session_refund_total,
     save_order,
     get_cafe_tables,
     get_table_bill_details,
@@ -510,6 +511,9 @@ class CafePOS:
 
         total = sum(sale[3] for sale in sales)
 
+        refund_total = get_session_refund_total(session_id)
+        net_total = total - refund_total   
+
         cash_total = sum(
             sale[3] for sale in sales
             if sale[5] == "cash"
@@ -537,8 +541,10 @@ class CafePOS:
         # Build the shift-closing message.
         message = (
             f"شماره شیفت: {session_id}\n"
-            f"تعداد فروش‌ها: {len(sales)}\n"
-            f"مجموع فروش: {total:,} تومان\n\n"
+            f"تعداد فروش‌ها: {len(sales)}\n\n"
+            f"فروش ناخالص: {total:,} تومان\n"
+            f"بازپرداخت‌ها: {refund_total:,} تومان\n"
+            f"فروش خالص: {net_total:,} تومان\n\n"
             f"فروش نقدی: {cash_total:,} تومان\n"
             f"فروش کارت: {card_total:,} تومان\n"
             f"روش پرداخت نامشخص: {unknown_total:,} تومان"

@@ -1105,6 +1105,35 @@ def add_payment_method_to_orders():
 
 
 
+def is_sale_refunded(sale_type, sale_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        if sale_type == "order":
+            cursor.execute("""
+                SELECT 1
+                FROM refunds
+                WHERE order_id = ?
+            """, (sale_id,))
+
+        elif sale_type == "table":
+            cursor.execute("""
+                SELECT 1
+                FROM refunds
+                WHERE bill_id = ?
+            """, (sale_id,))
+
+        else:
+            raise ValueError("نوع فروش نامعتبر است.")
+
+        return cursor.fetchone() is not None
+
+    finally:
+        conn.close()
+
+
 def refund_direct_sale(order_id, reason):
     reason = reason.strip()
 
