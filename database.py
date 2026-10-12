@@ -7,6 +7,39 @@ def connect():
     return connection
 
 
+def get_session_refunds_by_method(session_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT payment_method, COALESCE(SUM(amount), 0)
+            FROM refunds
+            WHERE session_id = ?
+            GROUP BY payment_method
+        """, (session_id,))
+
+        totals = {
+            "cash": 0,
+            "card": 0,
+            "unknown": 0
+        }
+
+        for payment_method, amount in cursor.fetchall():
+            if payment_method == "cash":
+                totals["cash"] = amount
+            elif payment_method == "card":
+                totals["card"] = amount
+            else:
+                totals["unknown"] += amount
+
+        return totals
+
+    finally:
+        conn.close()
+
+
 def get_session_refund_total(session_id):
     conn = connect()
 
@@ -20,6 +53,41 @@ def get_session_refund_total(session_id):
         """, (session_id,))
 
         return cursor.fetchone()[0]
+
+    finally:
+        conn.close()
+
+
+
+def get_refunds_by_method_and_date(start_date, end_date):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT payment_method, COALESCE(SUM(amount), 0)
+            FROM refunds
+            WHERE refunded_at >= ?
+              AND refunded_at < date(?, '+1 day')
+            GROUP BY payment_method
+        """, (start_date, end_date))
+
+        totals = {
+            "cash": 0,
+            "card": 0,
+            "unknown": 0
+        }
+
+        for method, amount in cursor.fetchall():
+            if method == "cash":
+                totals["cash"] += amount
+            elif method == "card":
+                totals["card"] += amount
+            else:
+                totals["unknown"] += amount
+
+        return totals
 
     finally:
         conn.close()
@@ -42,6 +110,33 @@ def get_refund_total_by_date(start_date, end_date):
 
     finally:
         conn.close()
+
+
+
+def add_payment_method_to_refunds():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(refunds)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "payment_method" not in columns:
+            cursor.execute("""
+                ALTER TABLE refunds
+                ADD COLUMN payment_method TEXT
+                    CHECK (
+                        payment_method IN ('cash', 'card')
+                        OR payment_method IS NULL
+                    )
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
 
 
 def create_refunds_table():
@@ -1134,8 +1229,11 @@ def is_sale_refunded(sale_type, sale_id):
         conn.close()
 
 
-def refund_direct_sale(order_id, reason):
+def refund_direct_sale(order_id, reason, payment_method):
     reason = reason.strip()
+    
+    if payment_method not in ("cash", "card"):
+        raise ValueError("روش بازپرداخت باید نقدی یا کارت باشد.")
 
     if not reason:
         raise ValueError("دلیل بازپرداخت نمی‌تواند خالی باشد.")
@@ -1188,17 +1286,19 @@ def refund_direct_sale(order_id, reason):
                 session_id,
                 amount,
                 reason,
-                refunded_at
+                refunded_at,
+                payment_method
             )
             VALUES (
                 ?, NULL, ?, ?, ?,
-                datetime('now', 'localtime')
+                datetime('now', 'localtime'), ?
             )
         """, (
             sale_id,
             refund_session_id,
             amount,
-            reason
+            reason,
+            payment_method
         ))
 
         # Mark the original sale as refunded.
@@ -1224,8 +1324,11 @@ def refund_direct_sale(order_id, reason):
 
 
 
-def refund_table_bill(bill_id, reason):
+def refund_table_bill(bill_id, reason, payment_method):
     reason = reason.strip()
+
+    if payment_method not in ("cash", "card"):
+        raise ValueError("روش بازپرداخت باید نقدی یا کارت باشد.")
 
     if not reason:
         raise ValueError("دلیل بازپرداخت نمی‌تواند خالی باشد.")
@@ -1288,17 +1391,19 @@ def refund_table_bill(bill_id, reason):
                 session_id,
                 amount,
                 reason,
-                refunded_at
+                refunded_at,
+                payment_method
             )
             VALUES (
                 NULL, ?, ?, ?, ?,
-                datetime('now', 'localtime')
+                datetime('now', 'localtime'), ?
             )
         """, (
             bill_id,
             refund_session_id,
             amount,
-            reason
+            reason,
+            payment_method
         ))
 
         cursor.execute("""
@@ -1392,3 +1497,4 @@ add_cancellation_fields_to_orders()
 add_cancellation_fields_to_table_bills()
 
 create_refunds_table()
+add_payment_method_to_refunds()

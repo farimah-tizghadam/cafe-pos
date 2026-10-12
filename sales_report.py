@@ -11,7 +11,9 @@ from database import (
     get_orders_by_date,
     get_table_bill_items,
     get_session_refund_total,
+    get_session_refunds_by_method,
     get_refund_total_by_date,
+    get_refunds_by_method_and_date,
     refund_direct_sale,
     refund_table_bill,
     is_sale_refunded,
@@ -411,6 +413,14 @@ class SalesReport(tk.Toplevel):
         )
         net_sales = total_sales - refund_total
 
+        refund_methods = get_session_refunds_by_method(
+            self.selected_session_id
+        )
+
+        cash_refunds = refund_methods["cash"]
+        card_refunds = refund_methods["card"]
+        unknown_refunds = refund_methods["unknown"]
+
         cash_total = sum(
             sale[3] for sale in sales
             if sale[5] == "cash"
@@ -429,11 +439,21 @@ class SalesReport(tk.Toplevel):
         self.report_total_label.config(
             text=(
                 f"فروش ناخالص: {total_sales:,} تومان\n"
-                f"نقدی: {cash_total:,} | "
-                f"کارت: {card_total:,} | "
-                f"نامشخص: {unknown_total:,} تومان\n"
-                f"بازپرداخت‌ها: {refund_total:,} تومان\n"
-                f"فروش خالص: {net_sales:,} تومان"
+                f"فروش نقدی: {cash_total:,} | "
+                f"فروش کارت: {card_total:,} | "
+                f"نامشخص: {unknown_total:,} تومان\n\n"
+
+                f"بازپرداخت نقدی: {cash_refunds:,} | "
+                f"بازپرداخت کارت: {card_refunds:,} | "
+                f"نامشخص: {unknown_refunds:,} تومان\n"
+
+                f"مجموع بازپرداخت‌ها: {refund_total:,} تومان\n\n"
+
+                f"خالص نقدی: {cash_total - cash_refunds:,} | "
+                f"خالص کارت: {card_total - card_refunds:,} | "
+                f"خالص نامشخص: {unknown_total - unknown_refunds:,} تومان\n"
+
+                f"فروش خالص کل: {net_sales:,} تومان"
             )
         )
 
@@ -484,6 +504,9 @@ class SalesReport(tk.Toplevel):
                     status_text,
                 )
             )
+
+        print("DEBUG: displayed rows =", len(self.orders_table.get_children()))
+        print("DEBUG: report total =", self.report_total_label.cget("text"))
 
 
 
@@ -585,6 +608,15 @@ class SalesReport(tk.Toplevel):
         )
         net_sales = total_sales - refund_total
 
+        refund_methods = get_refunds_by_method_and_date(
+            start.isoformat(),
+            end.isoformat()
+        )
+
+        cash_refunds = refund_methods["cash"]
+        card_refunds = refund_methods["card"]
+        unknown_refunds = refund_methods["unknown"]
+
         cash_total = sum(
             sale[3] for sale in sales
             if sale[5] == "cash"
@@ -601,15 +633,25 @@ class SalesReport(tk.Toplevel):
         )
 
         self.report_total_label.config(
-        text=(
-            f"فروش ناخالص: {total_sales:,} تومان\n"
-            f"نقدی: {cash_total:,} | "
-            f"کارت: {card_total:,} | "
-            f"نامشخص: {unknown_total:,} تومان\n"
-            f"بازپرداخت‌ها: {refund_total:,} تومان\n"
-            f"فروش خالص: {net_sales:,} تومان"
+            text=(
+                f"فروش ناخالص: {total_sales:,} تومان\n"
+                f"فروش نقدی: {cash_total:,} | "
+                f"فروش کارت: {card_total:,} | "
+                f"نامشخص: {unknown_total:,} تومان\n\n"
+
+                f"بازپرداخت نقدی: {cash_refunds:,} | "
+                f"بازپرداخت کارت: {card_refunds:,} | "
+                f"نامشخص: {unknown_refunds:,} تومان\n"
+
+                f"مجموع بازپرداخت‌ها: {refund_total:,} تومان\n\n"
+
+                f"خالص نقدی: {cash_total - cash_refunds:,} | "
+                f"خالص کارت: {card_total - card_refunds:,} | "
+                f"خالص نامشخص: {unknown_total - unknown_refunds:,} تومان\n"
+
+                f"فروش خالص کل: {net_sales:,} تومان"
+            )
         )
-    )
 
         self.session_label.config(
             text=f"گزارش از {start} تا {end}"
@@ -858,13 +900,60 @@ class SalesReport(tk.Toplevel):
             )
             return
 
+        payment_window = tk.Toplevel(self)
+        payment_window.title("روش بازپرداخت")
+        payment_window.geometry("320x190")
+        payment_window.transient(self)
+        payment_window.grab_set()
+
+        selected_method = tk.StringVar(value="card")
+        method_confirmed = {"value": False}
+
+        tk.Label(
+            payment_window,
+            text="مبلغ چگونه بازپرداخت می‌شود؟",
+            font=("Tahoma", 11)
+        ).pack(pady=12)
+
+        tk.Radiobutton(
+            payment_window,
+            text="کارت",
+            variable=selected_method,
+            value="card"
+        ).pack()
+
+        tk.Radiobutton(
+            payment_window,
+            text="نقدی",
+            variable=selected_method,
+            value="cash"
+        ).pack()
+
+        def confirm_refund_method():
+            method_confirmed["value"] = True
+            payment_window.destroy()
+
+        ttk.Button(
+            payment_window,
+            text="تأیید",
+            command=confirm_refund_method
+        ).pack(pady=12)
+
+        self.wait_window(payment_window)
+
+        if not method_confirmed["value"]:
+            return
+
+        payment_method = selected_method.get()
+
         confirmed = messagebox.askyesno(
             "تأیید بازپرداخت",
             (
                 f"آیا از بازپرداخت کامل این فروش مطمئن هستید؟\n\n"
                 f"فروش: {sale_name}\n"
                 f"مبلغ: {sale_amount} تومان\n"
-                f"دلیل: {reason}\n\n"
+                f"دلیل: {reason}\n"
+                f"روش بازپرداخت: {'نقدی' if payment_method == 'cash' else 'کارت'}\n\n"
                 "این عملیات قابل بازگشت نیست."
             ),
             icon="warning",
@@ -876,9 +965,9 @@ class SalesReport(tk.Toplevel):
 
         try:
             if sale_type == "table":
-                refund_table_bill(sale_id, reason)
+                refund_table_bill(sale_id, reason, payment_method)
             elif sale_type == "order":
-                refund_direct_sale(sale_id, reason)
+                refund_direct_sale(sale_id, reason, payment_method)
             else:
                 raise ValueError("نوع فروش نامعتبر است.")
 

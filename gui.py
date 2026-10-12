@@ -9,6 +9,7 @@ from database import (
     close_cashier_session,
     get_session_orders,
     get_session_refund_total,
+    get_session_refunds_by_method,
     save_order,
     get_cafe_tables,
     get_table_bill_details,
@@ -514,6 +515,12 @@ class CafePOS:
         refund_total = get_session_refund_total(session_id)
         net_total = total - refund_total   
 
+        refund_methods = get_session_refunds_by_method(session_id)
+
+        cash_refunds = refund_methods["cash"]
+        card_refunds = refund_methods["card"]
+        unknown_refunds = refund_methods["unknown"]
+
         cash_total = sum(
             sale[3] for sale in sales
             if sale[5] == "cash"
@@ -542,12 +549,22 @@ class CafePOS:
         message = (
             f"شماره شیفت: {session_id}\n"
             f"تعداد فروش‌ها: {len(sales)}\n\n"
+
             f"فروش ناخالص: {total:,} تومان\n"
-            f"بازپرداخت‌ها: {refund_total:,} تومان\n"
-            f"فروش خالص: {net_total:,} تومان\n\n"
             f"فروش نقدی: {cash_total:,} تومان\n"
             f"فروش کارت: {card_total:,} تومان\n"
-            f"روش پرداخت نامشخص: {unknown_total:,} تومان"
+            f"فروش نامشخص: {unknown_total:,} تومان\n\n"
+
+            f"بازپرداخت نقدی: {cash_refunds:,} تومان\n"
+            f"بازپرداخت کارت: {card_refunds:,} تومان\n"
+            f"بازپرداخت نامشخص: {unknown_refunds:,} تومان\n"
+            f"مجموع بازپرداخت‌ها: {refund_total:,} تومان\n\n"
+
+            f"خالص نقدی: {cash_total - cash_refunds:,} تومان\n"
+            f"خالص کارت: {card_total - card_refunds:,} تومان\n"
+            f"خالص نامشخص: {unknown_total - unknown_refunds:,} تومان\n\n"
+
+            f"فروش خالص کل: {net_total:,} تومان"
         )
 
         # Warn about unpaid table bills.
