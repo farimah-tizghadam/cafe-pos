@@ -18,6 +18,7 @@ from database import (
     get_order_items,
     get_table_bill_items,
     cancel_empty_table_bill,
+    calculate_discount,
 )
 
 from product_management import ProductManagement
@@ -343,6 +344,172 @@ class CafePOS:
         self.cart.pop(selected[0])
         self.refresh_cart()
 
+
+    def ask_payment_details(self, subtotal, parent=None):
+        if parent is None:
+            parent = self.root
+
+        window = tk.Toplevel(parent)
+        window.title("پرداخت و تخفیف")
+        window.geometry("390x420")
+        window.transient(parent)
+        window.grab_set()
+        window.resizable(False, False)
+
+        payment_method = tk.StringVar(value="card")
+        discount_type = tk.StringVar(value="none")
+        discount_value = tk.StringVar(value="0")
+
+        result = {"value": None}
+
+        tk.Label(
+            window,
+            text=f"مبلغ اولیه: {subtotal:,} تومان",
+            font=("Tahoma", 13, "bold")
+        ).pack(pady=12)
+
+        tk.Label(
+            window,
+            text="نوع تخفیف:",
+            font=("Tahoma", 11)
+        ).pack()
+
+        discount_options = ttk.Combobox(
+            window,
+            state="readonly",
+            values=["بدون تخفیف", "درصدی", "مبلغ ثابت"],
+            justify="right"
+        )
+        discount_options.current(0)
+        discount_options.pack(pady=6)
+
+        tk.Label(
+            window,
+            text="مقدار تخفیف:",
+            font=("Tahoma", 11)
+        ).pack()
+
+        discount_entry = ttk.Entry(
+            window,
+            textvariable=discount_value,
+            justify="center"
+        )
+        discount_entry.pack(pady=6)
+
+        final_label = tk.Label(
+            window,
+            text=f"مبلغ قابل پرداخت: {subtotal:,} تومان",
+            font=("Tahoma", 12, "bold"),
+            fg="#15803d"
+        )
+        final_label.pack(pady=10)
+
+        tk.Label(
+            window,
+            text="روش پرداخت:",
+            font=("Tahoma", 11)
+        ).pack()
+
+        tk.Radiobutton(
+            window,
+            text="کارت",
+            variable=payment_method,
+            value="card"
+        ).pack()
+
+        tk.Radiobutton(
+            window,
+            text="نقدی",
+            variable=payment_method,
+            value="cash"
+        ).pack()
+
+        def get_discount():
+            selected = discount_options.get()
+
+            types = {
+                "بدون تخفیف": "none",
+                "درصدی": "percent",
+                "مبلغ ثابت": "amount"
+            }
+
+            selected_type = types[selected]
+
+            if selected_type == "none":
+                value = 0
+            else:
+                raw_value = discount_value.get().strip()
+
+                if not raw_value.isdecimal():
+                    raise ValueError(
+                        "مقدار تخفیف باید یک عدد صحیح غیرمنفی باشد."
+                    )
+
+                value = int(raw_value)
+
+            amount, final_total = calculate_discount(
+                subtotal,
+                selected_type,
+                value
+            )
+
+            return selected_type, value, amount, final_total
+
+        def update_total(*args):
+            try:
+                _, _, amount, final_total = get_discount()
+
+                final_label.config(
+                    text=(
+                        f"تخفیف: {amount:,} تومان\n"
+                        f"مبلغ قابل پرداخت: {final_total:,} تومان"
+                    ),
+                    fg="#15803d"
+                )
+            except ValueError:
+                final_label.config(
+                    text="مقدار تخفیف نامعتبر است",
+                    fg="#dc2626"
+                )
+
+        def confirm():
+            try:
+                selected_type, value, amount, final_total = get_discount()
+            except ValueError as error:
+                messagebox.showerror(
+                    "خطای تخفیف",
+                    str(error),
+                    parent=window
+                )
+                return
+
+            result["value"] = {
+                "payment_method": payment_method.get(),
+                "discount_type": selected_type,
+                "discount_value": value,
+                "discount_amount": amount,
+                "final_total": final_total
+            }
+
+            window.destroy()
+
+        discount_options.bind(
+            "<<ComboboxSelected>>",
+            update_total
+        )
+        discount_value.trace_add("write", update_total)
+
+        ttk.Button(
+            window,
+            text="تأیید پرداخت",
+            command=confirm
+        ).pack(fill="x", padx=35, pady=12)
+
+        parent.wait_window(window)
+
+        return result["value"]
+
+
     def checkout(self):
         session_id = get_open_cashier_session()
 
@@ -360,84 +527,61 @@ class CafePOS:
             )
             return
 
-        total = sum(
+        subtotal = sum(
             item["price"] * item["quantity"]
             for item in self.cart
         )
 
-        if self.selected_bill_id is None:
-            sale_destination = "فروش مستقیم"
+        is_direct_sale = self.selected_bill_id is None
+
+        if is_direct_sale:
+            payment = self.ask_payment_details(subtotal)
+
+            if payment is None:
+                return
+
+            total = payment["final_total"]
+            payment_method = payment["payment_method"]
+            discount_type = payment["discount_type"]
+            discount_value = payment["discount_value"]
+
+            confirmation_text = (
+                "نوع فروش: فروش مستقیم\n"
+                f"مبلغ اولیه: {subtotal:,} تومان\n"
+                f"تخفیف: {payment['discount_amount']:,} تومان\n"
+                f"مبلغ قابل پرداخت: {total:,} تومان\n\n"
+                "آیا پرداخت انجام شد و سفارش ثبت شود؟"
+            )
         else:
-            sale_destination = f"میز: {self.selected_table_name}"
+            # Table orders are not paid until the bill is closed.
+            total = subtotal
+            payment_method = None
+            discount_type = "none"
+            discount_value = 0
+
+            confirmation_text = (
+                f"میز: {self.selected_table_name}\n"
+                f"مبلغ سفارش: {total:,} تومان\n\n"
+                "آیا سفارش به صورتحساب میز اضافه شود؟"
+            )
 
         confirmed = messagebox.askyesno(
             "تأیید سفارش",
-            f"نوع فروش: {sale_destination}\n"
-            f"مبلغ سفارش: {total:,} تومان\n\n"
-            "آیا سفارش ثبت شود؟"
+            confirmation_text
         )
 
         if not confirmed:
             return
 
-
-        payment_method = None
-                    
-        if self.selected_bill_id is None:
-            payment_window = tk.Toplevel(self.root)
-            payment_window.title("روش پرداخت")
-            payment_window.geometry("300x170")
-            payment_window.transient(self.root)
-            payment_window.grab_set()
-
-            selected_method = tk.StringVar(value="card")
-
-            tk.Label(
-                payment_window,
-                text="روش پرداخت را انتخاب کنید:",
-                font=("Tahoma", 11)
-            ).pack(pady=10)
-
-            tk.Radiobutton(
-            payment_window,
-            text="کارت",
-            variable=selected_method,
-            value="card"
-            ).pack()
-
-            tk.Radiobutton(
-                payment_window,
-                text="نقدی",
-                variable=selected_method,
-                value="cash"
-            ).pack()
-
-            confirmed = {"value": False}
-
-            def confirm_payment():
-                confirmed["value"] = True
-                payment_window.destroy()
-
-            tk.Button(
-                payment_window,
-                text="تأیید",
-                command=confirm_payment
-            ).pack(pady=10)
-
-            self.root.wait_window(payment_window)
-
-            if not confirmed["value"]:
-                return
-
-            payment_method = selected_method.get()
-        
         try:
             save_order(
                 session_id,
                 total,
                 self.cart,
                 bill_id=self.selected_bill_id,
-                payment_method=payment_method
+                payment_method=payment_method,
+                discount_type=discount_type,
+                discount_value=discount_value
             )
         except Exception as error:
             messagebox.showerror(
@@ -449,7 +593,7 @@ class CafePOS:
         self.cart.clear()
         self.refresh_cart()
 
-        if self.selected_bill_id is not None:
+        if not is_direct_sale:
             table_name = self.selected_table_name
 
             self.selected_table_id = None
@@ -463,14 +607,16 @@ class CafePOS:
             messagebox.showinfo(
                 "ثبت موفق",
                 f"سفارش {table_name} با موفقیت ثبت شد.\n"
-                f"مبلغ: {total:,} تومان\n\n"
+                f"مبلغ سفارش: {total:,} تومان\n\n"
                 "نوع فروش به فروش مستقیم تغییر کرد."
             )
         else:
             messagebox.showinfo(
                 "ثبت موفق",
-                f"سفارش با موفقیت ثبت شد.\n"
-                f"مبلغ: {total:,} تومان"
+                "سفارش با موفقیت ثبت شد.\n"
+                f"مبلغ اولیه: {subtotal:,} تومان\n"
+                f"تخفیف: {payment['discount_amount']:,} تومان\n"
+                f"مبلغ پرداخت‌شده: {total:,} تومان"
             )
 
     def open_cashier(self):
@@ -483,6 +629,7 @@ class CafePOS:
 
         open_cashier_session()
         self.update_status()
+
 
     def close_cashier(self):
         session_id = get_open_cashier_session()
@@ -503,68 +650,36 @@ class CafePOS:
 
         try:
             sales = get_session_orders(session_id)
+            total = sum(sale[3] for sale in sales)
+
+            refund_total = get_session_refund_total(session_id)
+            net_total = total - refund_total
+
+            tables = get_cafe_tables()
+
         except Exception as error:
             messagebox.showerror(
                 "خطا",
-                f"محاسبه فروش شیفت ناموفق بود:\n{error}"
+                f"محاسبه گزارش شیفت ناموفق بود:\n{error}"
             )
             return
 
-        total = sum(sale[3] for sale in sales)
-
-        refund_total = get_session_refund_total(session_id)
-        net_total = total - refund_total   
-
-        refund_methods = get_session_refunds_by_method(session_id)
-
-        cash_refunds = refund_methods["cash"]
-        card_refunds = refund_methods["card"]
-        unknown_refunds = refund_methods["unknown"]
-
-        cash_total = sum(
-            sale[3] for sale in sales
-            if sale[5] == "cash"
-        )
-
-        card_total = sum(
-            sale[3] for sale in sales
-            if sale[5] == "card"
-        )
-
-        unknown_total = sum(
-            sale[3] for sale in sales
-            if sale[5] not in ("cash", "card")
-        )
-
-        # Find tables that still have an open bill.
-        tables = get_cafe_tables()
-
+        # Find tables with unpaid bills.
         open_tables = [
             table_name
             for table_id, table_name, open_bill_id in tables
             if open_bill_id is not None
         ]
 
-        # Build the shift-closing message.
+        # Simple shift-closing summary.
         message = (
             f"شماره شیفت: {session_id}\n"
-            f"تعداد فروش‌ها: {len(sales)}\n\n"
-
-            f"فروش ناخالص: {total:,} تومان\n"
-            f"فروش نقدی: {cash_total:,} تومان\n"
-            f"فروش کارت: {card_total:,} تومان\n"
-            f"فروش نامشخص: {unknown_total:,} تومان\n\n"
-
-            f"بازپرداخت نقدی: {cash_refunds:,} تومان\n"
-            f"بازپرداخت کارت: {card_refunds:,} تومان\n"
-            f"بازپرداخت نامشخص: {unknown_refunds:,} تومان\n"
-            f"مجموع بازپرداخت‌ها: {refund_total:,} تومان\n\n"
-
-            f"خالص نقدی: {cash_total - cash_refunds:,} تومان\n"
-            f"خالص کارت: {card_total - card_refunds:,} تومان\n"
-            f"خالص نامشخص: {unknown_total - unknown_refunds:,} تومان\n\n"
-
-            f"فروش خالص کل: {net_total:,} تومان"
+            f"تعداد فروش‌ها: {len(sales)}\n"
+            "────────────────────\n"
+            f"فروش پس از تخفیف: {total:,} تومان\n"
+            f"مجموع بازپرداخت‌ها: {refund_total:,} تومان\n"
+            "────────────────────\n"
+            f"فروش خالص: {net_total:,} تومان"
         )
 
         # Warn about unpaid table bills.
@@ -572,9 +687,9 @@ class CafePOS:
             table_names = "، ".join(open_tables)
 
             message += (
-                f"\n\nصورتحساب باز: {len(open_tables)}"
+                f"\n\n⚠ صورتحساب باز: {len(open_tables)}"
                 f"\nمیزها: {table_names}"
-                "\nاین صورتحساب‌ها باز می‌مانند و به شیفت بعد منتقل می‌شوند."
+                "\nاین صورتحساب‌ها به شیفت بعد منتقل می‌شوند."
             )
 
         message += "\n\nآیا صندوق بسته شود؟"
@@ -597,6 +712,7 @@ class CafePOS:
             return
 
         self.update_status()
+
 
     def open_product_management(self):
         ProductManagement(
@@ -751,135 +867,102 @@ class CafePOS:
             bill_window,
             tables_window
         ):
-            try:
-                bill = get_table_bill_details(bill_id)
-            except Exception as error:
-                messagebox.showerror(
-                    "خطا",
-                    f"دریافت صورتحساب ناموفق بود:\n{error}",
-                    parent=bill_window
-                )
-                return
-
-            if bill["status"] != "open":
-                messagebox.showwarning(
-                    "پرداخت",
-                    "این صورتحساب قبلاً بسته شده است.",
-                    parent=bill_window
-                )
-                return
-
-            if bill["total"] <= 0:
-                messagebox.showwarning(
-                    "پرداخت",
-                    "صورتحساب این میز خالی است.",
-                    parent=bill_window
-                )
-                return
-
-            confirmed = messagebox.askyesno(
-                "تأیید پرداخت",
-                f"میز: {bill['table_name']}\n"
-                f"مبلغ قابل پرداخت: {bill['total']:,} تومان\n\n"
-                "آیا پرداخت انجام شد؟",
+        try:
+            bill = get_table_bill_details(bill_id)
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"دریافت صورتحساب ناموفق بود:\n{error}",
                 parent=bill_window
             )
+            return
 
-            if not confirmed:
-                return
-
-            session_id = get_open_cashier_session()
-
-            if session_id is None:
-                messagebox.showwarning(
-                    "پرداخت",
-                    "برای ثبت پرداخت ابتدا صندوق را باز کنید.",
-                    parent=bill_window
-                )
-                return
-
-            payment_window = tk.Toplevel(bill_window)
-            payment_window.title("روش پرداخت")
-            payment_window.geometry("300x170")
-            payment_window.transient(bill_window)
-            payment_window.grab_set()
-
-            selected_method = tk.StringVar(value="card")
-
-            tk.Label(
-                payment_window,
-                text="روش پرداخت صورتحساب:",
-                font=("Tahoma", 11)
-            ).pack(pady=10)
-
-            tk.Radiobutton(
-                payment_window,
-                text="کارت",
-                variable=selected_method,
-                value="card"
-            ).pack()
-
-            tk.Radiobutton(
-                payment_window,
-                text="نقدی",
-                variable=selected_method,
-                value="cash"
-            ).pack()
-
-            confirmed_payment = {"value": False}
-
-            def confirm_payment_method():
-                confirmed_payment["value"] = True
-                payment_window.destroy()
-
-            tk.Button(
-                payment_window,
-                text="تأیید",
-                command=confirm_payment_method
-            ).pack(pady=10)
-
-            bill_window.wait_window(payment_window)
-
-            if not confirmed_payment["value"]:
-                return
-
-            payment_method = selected_method.get()
-
-            try:
-                close_table_bill(
-                    bill_id,
-                    session_id,
-                    payment_method
-                )
-            except Exception as error:
-                messagebox.showerror(
-                    "خطا",
-                    f"بستن صورتحساب ناموفق بود:\n{error}",
-                    parent=bill_window
-                )
-                return
-
-            # Clear the selected table if this is the currently selected bill.
-            if self.selected_bill_id == bill_id:
-                self.selected_table_id = None
-                self.selected_table_name = None
-                self.selected_bill_id = None
-
-                self.table_status_label.config(
-                    text="نوع فروش: مستقیم"
-                )
-
-            total = bill["total"]
-            table_name = bill["table_name"]
-
-            bill_window.destroy()
-            tables_window.destroy()
-
-            messagebox.showinfo(
-                "پرداخت موفق",
-                f"صورتحساب {table_name} بسته شد.\n"
-                f"مبلغ پرداخت‌شده: {total:,} تومان"
+        if bill["status"] != "open":
+            messagebox.showwarning(
+                "پرداخت",
+                "این صورتحساب قبلاً بسته شده است.",
+                parent=bill_window
             )
+            return
+
+        subtotal = bill["total"]
+
+        if subtotal <= 0:
+            messagebox.showwarning(
+                "پرداخت",
+                "صورتحساب این میز خالی است.",
+                parent=bill_window
+            )
+            return
+
+        session_id = get_open_cashier_session()
+
+        if session_id is None:
+            messagebox.showwarning(
+                "پرداخت",
+                "برای ثبت پرداخت ابتدا صندوق را باز کنید.",
+                parent=bill_window
+            )
+            return
+
+        payment = self.ask_payment_details(
+            subtotal,
+            parent=bill_window
+        )
+
+        if payment is None:
+            return
+
+        confirmed = messagebox.askyesno(
+            "تأیید پرداخت",
+            f"میز: {bill['table_name']}\n"
+            f"مبلغ اولیه: {subtotal:,} تومان\n"
+            f"تخفیف: {payment['discount_amount']:,} تومان\n"
+            f"مبلغ قابل پرداخت: {payment['final_total']:,} تومان\n\n"
+            "آیا پرداخت انجام شد؟",
+            parent=bill_window
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            final_total = close_table_bill(
+                bill_id,
+                session_id,
+                payment["payment_method"],
+                discount_type=payment["discount_type"],
+                discount_value=payment["discount_value"]
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"بستن صورتحساب ناموفق بود:\n{error}",
+                parent=bill_window
+            )
+            return
+
+        if self.selected_bill_id == bill_id:
+            self.selected_table_id = None
+            self.selected_table_name = None
+            self.selected_bill_id = None
+
+            self.table_status_label.config(
+                text="نوع فروش: مستقیم"
+            )
+
+        table_name = bill["table_name"]
+
+        bill_window.destroy()
+        tables_window.destroy()
+
+        messagebox.showinfo(
+            "پرداخت موفق",
+            f"صورتحساب {table_name} بسته شد.\n"
+            f"مبلغ اولیه: {subtotal:,} تومان\n"
+            f"تخفیف: {payment['discount_amount']:,} تومان\n"
+            f"مبلغ پرداخت‌شده: {final_total:,} تومان"
+        )
 
 
     def select_table_from_bill(

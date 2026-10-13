@@ -438,7 +438,7 @@ class SalesReport(tk.Toplevel):
 
         self.report_total_label.config(
             text=(
-                f"فروش ناخالص: {total_sales:,} تومان\n"
+                f"فروش پس از تخفیف: {total_sales:,} تومان\n"
                 f"فروش نقدی: {cash_total:,} | "
                 f"فروش کارت: {card_total:,} | "
                 f"نامشخص: {unknown_total:,} تومان\n\n"
@@ -504,10 +504,6 @@ class SalesReport(tk.Toplevel):
                     status_text,
                 )
             )
-
-        print("DEBUG: displayed rows =", len(self.orders_table.get_children()))
-        print("DEBUG: report total =", self.report_total_label.cget("text"))
-
 
 
     def show_order_items(self, event=None):
@@ -634,7 +630,7 @@ class SalesReport(tk.Toplevel):
 
         self.report_total_label.config(
             text=(
-                f"فروش ناخالص: {total_sales:,} تومان\n"
+                f"فروش پس از تخفیف: {total_sales:,} تومان\n"
                 f"فروش نقدی: {cash_total:,} | "
                 f"فروش کارت: {card_total:,} | "
                 f"نامشخص: {unknown_total:,} تومان\n\n"

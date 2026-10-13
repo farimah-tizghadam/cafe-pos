@@ -195,6 +195,79 @@ def create_refunds_table():
         conn.close()
 
 
+
+def add_discount_fields():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        # Direct sales: orders table
+        cursor.execute("PRAGMA table_info(orders)")
+        order_columns = {
+            row[1] for row in cursor.fetchall()
+        }
+
+        if "subtotal" not in order_columns:
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN subtotal INTEGER
+            """)
+
+        if "discount_amount" not in order_columns:
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN discount_amount INTEGER NOT NULL DEFAULT 0
+            """)
+
+        # Existing orders had no discounts.
+        cursor.execute("""
+            UPDATE orders
+            SET subtotal = total
+            WHERE subtotal IS NULL
+        """)
+
+        # Table discounts belong to the final bill.
+        cursor.execute("PRAGMA table_info(table_bills)")
+        bill_columns = {
+            row[1] for row in cursor.fetchall()
+        }
+
+        if "subtotal" not in bill_columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN subtotal INTEGER
+            """)
+
+        if "discount_amount" not in bill_columns:
+            cursor.execute("""
+                ALTER TABLE table_bills
+                ADD COLUMN discount_amount INTEGER NOT NULL DEFAULT 0
+            """)
+
+        # Existing paid table bills had no discounts.
+        cursor.execute("""
+            UPDATE table_bills
+            SET subtotal = (
+                SELECT COALESCE(SUM(o.total), 0)
+                FROM orders AS o
+                WHERE o.bill_id = table_bills.id
+            )
+            WHERE subtotal IS NULL
+              AND status = 'closed'
+        """)
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
 def create_products_table():
     connection = connect()
 
@@ -325,13 +398,48 @@ def create_order_table():
     connection.close()
 
 
+def calculate_discount(subtotal, discount_type="none", discount_value=0):
+    if type(subtotal) is not int or subtotal <= 0:
+        raise ValueError("مبلغ اولیه باید بیشتر از صفر باشد.")
+
+    if type(discount_value) is not int or discount_value < 0:
+        raise ValueError("مقدار تخفیف نامعتبر است.")
+
+    if discount_type == "none":
+        if discount_value != 0:
+            raise ValueError("برای بدون تخفیف، مقدار باید صفر باشد.")
+        discount_amount = 0
+
+    elif discount_type == "percent":
+        if discount_value > 100:
+            raise ValueError("درصد تخفیف نباید بیشتر از ۱۰۰ باشد.")
+
+        discount_amount = (
+            subtotal * discount_value + 50
+        ) // 100
+
+    elif discount_type == "amount":
+        if discount_value > subtotal:
+            raise ValueError("تخفیف نباید بیشتر از مبلغ کل باشد.")
+
+        discount_amount = discount_value
+
+    else:
+        raise ValueError("نوع تخفیف نامعتبر است.")
+
+    final_total = subtotal - discount_amount
+
+    return discount_amount, final_total
+
 
 def save_order(
         session_id,
         total,
         items,
         bill_id=None,
-        payment_method=None
+        payment_method=None,
+        discount_type="none",
+        discount_value=0
     ):
     conn = connect()
 
@@ -385,6 +493,7 @@ def save_order(
             raise ValueError("Cannot save an empty order.")
 
         # Calculate the total on the backend.
+                # Calculate the total on the backend.
         calculated_total = 0
 
         for item in items:
@@ -396,9 +505,30 @@ def save_order(
 
             calculated_total += quantity * price
 
-        if calculated_total != total:
-            raise ValueError("Order total does not match.")
+        # Check the total only AFTER all items are added.
+        subtotal = calculated_total
 
+        if bill_id is None:
+            discount_amount, final_total = calculate_discount(
+                subtotal,
+                discount_type,
+                discount_value
+            )
+
+            if total != final_total:
+                raise ValueError("مبلغ نهایی سفارش صحیح نیست.")
+
+        else:
+            if discount_type != "none" or discount_value != 0:
+                raise ValueError(
+                    "تخفیف میز فقط هنگام تسویه صورتحساب اعمال می‌شود."
+                )
+
+            discount_amount = 0
+
+            if total != subtotal:
+                raise ValueError("مبلغ سفارش میز صحیح نیست.")
+            
         # Save the order.
         cursor.execute(
             """
@@ -407,15 +537,19 @@ def save_order(
                 total, 
                 created_at,
                 bill_id,
-                payment_method
+                payment_method,
+                subtotal,
+                discount_amount
             )
-            VALUES (?, ?, datetime('now', 'localtime'), ?, ?)
+            VALUES (?, ?, datetime('now', 'localtime'), ?, ?, ?, ?)
             """,
             (
                 session_id,
                 total,
                 bill_id,
-                payment_method
+                payment_method,
+                subtotal,
+                discount_amount
             )
         )
 
@@ -716,7 +850,11 @@ def get_session_orders(session_id):
                 'table' AS sale_type,
                 b.id AS sale_id,
                 t.name AS table_name,
-                COALESCE(SUM(o.total), 0) AS total,
+                COALESCE(
+                    b.subtotal - b.discount_amount,
+                    SUM(o.total),
+                    0
+                ) AS total,
                 b.paid_at AS sale_time,
                 b.payment_method AS payment_method
             FROM table_bills AS b
@@ -769,7 +907,11 @@ def get_orders_by_date(start_date, end_date):
                 'table' AS sale_type,
                 b.id AS sale_id,
                 t.name AS table_name,
-                COALESCE(SUM(o.total), 0) AS total,
+                COALESCE(
+                    b.subtotal - b.discount_amount,
+                    SUM(o.total),
+                    0
+                ) AS total,
                 b.paid_at AS sale_time,
                 b.payment_method AS payment_method
             FROM table_bills AS b
@@ -998,7 +1140,13 @@ def cancel_empty_table_bill(bill_id):
 
 
 
-def close_table_bill(bill_id, session_id, payment_method):
+def close_table_bill(
+        bill_id,
+        session_id,
+        payment_method,
+        discount_type="none",
+        discount_value=0
+    ):
     conn = connect()
 
     try:
@@ -1024,7 +1172,45 @@ def close_table_bill(bill_id, session_id, payment_method):
                 "برای ثبت پرداخت، صندوق باید باز باشد."
             )
 
-        # Close the bill and record payment information.
+        # Verify that the table bill is open.
+        cursor.execute(
+            """
+            SELECT id
+            FROM table_bills
+            WHERE id = ?
+              AND status = 'open'
+            """,
+            (bill_id,)
+        )
+
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "این صورتحساب وجود ندارد یا قبلاً بسته شده است."
+            )
+
+        # Calculate the original bill amount.
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(total), 0)
+            FROM orders
+            WHERE bill_id = ?
+            """,
+            (bill_id,)
+        )
+
+        subtotal = cursor.fetchone()[0]
+
+        if subtotal <= 0:
+            raise ValueError("صورتحساب میز خالی است.")
+
+        # Calculate discount and final payment.
+        discount_amount, final_total = calculate_discount(
+            subtotal,
+            discount_type,
+            discount_value
+        )
+
+        # Close the bill and save the discount.
         cursor.execute(
             """
             UPDATE table_bills
@@ -1032,19 +1218,29 @@ def close_table_bill(bill_id, session_id, payment_method):
                 closed_at = datetime('now', 'localtime'),
                 paid_at = datetime('now', 'localtime'),
                 paid_session_id = ?,
-                payment_method = ?
+                payment_method = ?,
+                subtotal = ?,
+                discount_amount = ?
             WHERE id = ?
-            AND status = 'open'
+              AND status = 'open'
             """,
-            (session_id, payment_method, bill_id)
+            (
+                session_id,
+                payment_method,
+                subtotal,
+                discount_amount,
+                bill_id
+            )
         )
 
         if cursor.rowcount != 1:
             raise ValueError(
-                "این صورتحساب وجود ندارد یا قبلاً بسته شده است."
+                "بستن صورتحساب ناموفق بود."
             )
 
         conn.commit()
+
+        return final_total
 
     except Exception:
         conn.rollback()
@@ -1356,18 +1552,23 @@ def refund_table_bill(bill_id, reason, payment_method):
         if bill[1] is not None:
             raise ValueError("این صورتحساب قبلاً بازپرداخت شده است.")
 
-        # Calculate the full bill amount from its order batches.
+                # Refund the amount actually paid after discount.
         cursor.execute("""
-            SELECT COALESCE(SUM(total), 0)
-            FROM orders
-            WHERE bill_id = ?
+            SELECT COALESCE(
+                b.subtotal - b.discount_amount,
+                (
+                    SELECT SUM(o.total)
+                    FROM orders AS o
+                    WHERE o.bill_id = b.id
+                ),
+                0
+            )
+            FROM table_bills AS b
+            WHERE b.id = ?
         """, (bill_id,))
 
         amount = cursor.fetchone()[0]
-
-        if amount <= 0:
-            raise ValueError("مبلغ صورتحساب معتبر نیست.")
-
+        
         # Refunds belong to the currently open cashier shift.
         cursor.execute("""
             SELECT id
@@ -1498,3 +1699,4 @@ add_cancellation_fields_to_table_bills()
 
 create_refunds_table()
 add_payment_method_to_refunds()
+add_discount_fields()
