@@ -288,6 +288,119 @@ def create_products_table():
 
 
 
+def get_direct_sale_receipt(order_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                id,
+                created_at,
+                subtotal,
+                discount_amount,
+                total,
+                payment_method
+            FROM orders
+            WHERE id = ?
+              AND bill_id IS NULL
+        """, (order_id,))
+
+        order = cursor.fetchone()
+
+        if order is None:
+            raise ValueError("فروش مستقیم پیدا نشد.")
+
+        cursor.execute("""
+            SELECT
+                p.name,
+                oi.quantity,
+                oi.price
+            FROM order_items AS oi
+            JOIN products AS p
+                ON p.id = oi.product_id
+            WHERE oi.order_id = ?
+            ORDER BY oi.id
+        """, (order_id,))
+
+        return {
+            "receipt_number": order[0],
+            "date": order[1],
+            "subtotal": order[2],
+            "discount": order[3],
+            "total": order[4],
+            "payment_method": order[5],
+            "items": cursor.fetchall()
+        }
+
+    finally:
+        conn.close()
+
+
+
+def get_table_receipt(bill_id):
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                b.id,
+                t.name,
+                b.paid_at,
+                b.subtotal,
+                b.discount_amount,
+                b.payment_method
+            FROM table_bills AS b
+            JOIN cafe_tables AS t
+                ON t.id = b.table_id
+            WHERE b.id = ?
+              AND b.status = 'closed'
+              AND b.paid_at IS NOT NULL
+        """, (bill_id,))
+
+        bill = cursor.fetchone()
+
+        if bill is None:
+            raise ValueError("صورتحساب پرداخت‌شده پیدا نشد.")
+
+        cursor.execute("""
+            SELECT
+                p.name,
+                oi.quantity,
+                oi.price
+            FROM orders AS o
+            JOIN order_items AS oi
+                ON oi.order_id = o.id
+            JOIN products AS p
+                ON p.id = oi.product_id
+            WHERE o.bill_id = ?
+            ORDER BY o.id, oi.id
+        """, (bill_id,))
+
+        items = cursor.fetchall()
+
+        subtotal = bill[3]
+        discount = bill[4]
+
+        return {
+            "receipt_number": bill[0],
+            "table_name": bill[1],
+            "date": bill[2],
+            "subtotal": subtotal,
+            "discount": discount,
+            "total": subtotal - discount,
+            "payment_method": bill[5],
+            "items": items
+        }
+    
+    finally:
+        conn.close()
+
+
+
 
 def add_products(name, price):
     name = name.strip()
@@ -1568,7 +1681,7 @@ def refund_table_bill(bill_id, reason, payment_method):
         """, (bill_id,))
 
         amount = cursor.fetchone()[0]
-        
+
         # Refunds belong to the currently open cashier shift.
         cursor.execute("""
             SELECT id

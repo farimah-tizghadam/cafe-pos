@@ -19,10 +19,14 @@ from database import (
     get_table_bill_items,
     cancel_empty_table_bill,
     calculate_discount,
+    get_direct_sale_receipt,
+    get_table_receipt,
 )
 
 from product_management import ProductManagement
 from sales_report import SalesReport
+from receipt import show_receipt_preview, format_receipt
+from database import get_direct_sale_receipt
 
 
 class CafePOS:
@@ -574,7 +578,7 @@ class CafePOS:
             return
 
         try:
-            save_order(
+            order_id = save_order(
                 session_id,
                 total,
                 self.cart,
@@ -618,6 +622,18 @@ class CafePOS:
                 f"تخفیف: {payment['discount_amount']:,} تومان\n"
                 f"مبلغ پرداخت‌شده: {total:,} تومان"
             )
+
+            try:
+                receipt_data = get_direct_sale_receipt(order_id)
+                receipt_text = format_receipt(receipt_data)
+
+                show_receipt_preview(self.root, receipt_text)
+
+            except Exception as error:
+                messagebox.showerror(
+                    "خطای رسید",
+                    f"فروش ثبت شد، اما رسید نمایش داده نشد:\n{error}"
+                )
 
     def open_cashier(self):
         if get_open_cashier_session() is not None:
@@ -963,6 +979,18 @@ class CafePOS:
             f"تخفیف: {payment['discount_amount']:,} تومان\n"
             f"مبلغ پرداخت‌شده: {final_total:,} تومان"
         )
+
+        try:
+            receipt_data = get_table_receipt(bill_id)
+            receipt_text = format_receipt(receipt_data)
+
+            show_receipt_preview(self.root, receipt_text)
+
+        except Exception as error:
+            messagebox.showerror(
+                "خطای رسید",
+                f"پرداخت ثبت شد، اما رسید نمایش داده نشد:\n{error}"
+            )
 
 
     def select_table_from_bill(
