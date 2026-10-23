@@ -21,12 +21,14 @@ from database import (
     calculate_discount,
     get_direct_sale_receipt,
     get_table_receipt,
+    get_cafe_settings,
 )
 
 from product_management import ProductManagement
 from sales_report import SalesReport
 from receipt import show_receipt_preview, format_receipt
 from database import get_direct_sale_receipt
+from cafe_settings import show_cafe_settings
 
 
 class CafePOS:
@@ -72,13 +74,16 @@ class CafePOS:
         header.pack(fill="x")
         header.pack_propagate(False)
 
-        tk.Label(
+        self.header_title = tk.Label(
             header,
-            text="صندوق فروش کافه",
+            text="",
             bg="#172554",
             fg="white",
             font=("Tahoma", 20, "bold")
-        ).pack(side="right", padx=25, pady=20)
+        )
+        self.header_title.pack(side="right", padx=25, pady=20)
+
+        self.refresh_cafe_name()
 
         self.status_label = tk.Label(
             header,
@@ -129,6 +134,16 @@ class CafePOS:
             controls,
             text="گزارش فروش",
             command=self.open_sales_report
+        ).pack(side="right", padx=5)
+
+
+        ttk.Button(
+            controls,
+            text="تنظیمات کافه",
+            command=lambda: (
+                show_cafe_settings(self.root),
+                self.refresh_cafe_name()
+            )
         ).pack(side="right", padx=5)
 
 
@@ -238,6 +253,15 @@ class CafePOS:
             relief="flat",
             pady=12
         ).pack(fill="x")
+
+
+    def refresh_cafe_name(self):
+        settings = get_cafe_settings()
+
+        self.header_title.config(
+            text=f'{settings["cafe_name"]} | صندوق فروش'
+        )
+
 
     def update_status(self):
         session_id = get_open_cashier_session()
@@ -627,7 +651,11 @@ class CafePOS:
                 receipt_data = get_direct_sale_receipt(order_id)
                 receipt_text = format_receipt(receipt_data)
 
-                show_receipt_preview(self.root, receipt_text)
+                show_receipt_preview(
+                    self.root,
+                    receipt_text,
+                    receipt_data=receipt_data
+                )
 
             except Exception as error:
                 messagebox.showerror(
@@ -831,6 +859,8 @@ class CafePOS:
                 padx=20,
                 pady=5
             )
+    
+    
     def cancel_empty_bill_from_window(
         self,
         bill_id,
@@ -984,7 +1014,11 @@ class CafePOS:
             receipt_data = get_table_receipt(bill_id)
             receipt_text = format_receipt(receipt_data)
 
-            show_receipt_preview(self.root, receipt_text)
+            show_receipt_preview(
+                self.root,
+                receipt_text,
+                receipt_data=receipt_data
+            )
 
         except Exception as error:
             messagebox.showerror(

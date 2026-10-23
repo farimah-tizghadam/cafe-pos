@@ -1797,6 +1797,127 @@ def add_cancellation_fields_to_table_bills():
         conn.close()
 
 
+def create_cafe_settings_table():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cafe_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                cafe_name TEXT NOT NULL DEFAULT 'کافه',
+                address TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT ''
+            )
+        """)
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO cafe_settings
+                (id, cafe_name, address, phone)
+            VALUES (1, 'کافه', '', '')
+        """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+
+def add_receipt_paper_width():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(cafe_settings)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "receipt_paper_width" not in columns:
+            cursor.execute("""
+                ALTER TABLE cafe_settings
+                ADD COLUMN receipt_paper_width INTEGER
+                NOT NULL DEFAULT 80
+                CHECK (receipt_paper_width IN (58, 80))
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+        
+
+
+def get_cafe_settings():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT cafe_name, address, phone, receipt_paper_width
+            FROM cafe_settings
+            WHERE id = 1
+        """)
+
+        row = cursor.fetchone()
+
+        if row is None:
+            raise ValueError("تنظیمات کافه پیدا نشد.")
+
+        return {
+            "cafe_name": row[0],
+            "address": row[1],
+            "phone": row[2],
+            "receipt_paper_width": row[3]
+        }
+
+    finally:
+        conn.close()
+
+
+
+def update_cafe_settings(cafe_name, address, phone, receipt_paper_width=80):
+    cafe_name = cafe_name.strip()
+    address = address.strip()
+    phone = phone.strip()
+
+    receipt_paper_width = int(receipt_paper_width)
+
+    if not cafe_name:
+        raise ValueError("نام کافه نمی‌تواند خالی باشد.")
+
+    if receipt_paper_width not in (58, 80):
+        raise ValueError("عرض کاغذ باید ۵۸ یا ۸۰ میلی‌متر باشد.")
+
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE cafe_settings
+            SET cafe_name = ?,
+                address = ?,
+                phone = ?,
+                receipt_paper_width = ?
+            WHERE id = 1
+        """, (cafe_name, address, phone, receipt_paper_width))
+
+        if cursor.rowcount != 1:
+            raise ValueError("تنظیمات کافه پیدا نشد.")
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+        
+
 create_products_table()
 create_cashier_sessions_table()
 create_order_table()
@@ -1813,3 +1934,6 @@ add_cancellation_fields_to_table_bills()
 create_refunds_table()
 add_payment_method_to_refunds()
 add_discount_fields()
+
+create_cafe_settings_table()
+add_receipt_paper_width()
