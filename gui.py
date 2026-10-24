@@ -29,6 +29,8 @@ from sales_report import SalesReport
 from receipt import show_receipt_preview, format_receipt
 from database import get_direct_sale_receipt
 from cafe_settings import show_cafe_settings
+from table_management import show_table_management
+
 
 
 class CafePOS:
@@ -111,6 +113,8 @@ class CafePOS:
         )
 
         self.table_status_label.pack(side="left", padx=10)
+        management_row = ttk.Frame(self.root)
+        management_row.pack(fill="x", padx=20, pady=(0, 5))
 
         ttk.Button(
             controls,
@@ -153,7 +157,15 @@ class CafePOS:
             command=self.open_tables_window
         ).pack(side="right", padx=5)
 
-
+        
+        ttk.Button(
+            management_row,
+            text="مدیریت میزها",
+            command=lambda: show_table_management(self.root),
+            width=18
+        ).pack(side="right", padx=5)
+        
+        
         ttk.Button(
             controls,
             text="فروش مستقیم",

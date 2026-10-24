@@ -1122,6 +1122,115 @@ def add_cafe_table(name):
 
 
 
+def rename_cafe_table(table_id, new_name):
+    new_name = new_name.strip()
+
+    if not new_name:
+        raise ValueError("نام میز نمی‌تواند خالی باشد.")
+
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE cafe_tables
+            SET name = ?
+            WHERE id = ?
+              AND is_active = 1
+        """, (new_name, table_id))
+
+        if cursor.rowcount != 1:
+            raise ValueError("میز پیدا نشد یا غیرفعال است.")
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise ValueError("میزی با این نام از قبل وجود دارد.")
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
+def get_all_cafe_tables():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                t.id,
+                t.name,
+                t.is_active,
+                b.id AS open_bill_id
+            FROM cafe_tables AS t
+            LEFT JOIN table_bills AS b
+                ON b.table_id = t.id
+                AND b.status = 'open'
+            ORDER BY t.id
+        """)
+
+        return cursor.fetchall()
+
+    finally:
+        conn.close()
+
+
+def set_cafe_table_active(table_id, is_active):
+    if is_active not in (0, 1):
+        raise ValueError("وضعیت میز نامعتبر است.")
+
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        if is_active == 0:
+            cursor.execute("""
+                SELECT id
+                FROM table_bills
+                WHERE table_id = ?
+                  AND status = 'open'
+            """, (table_id,))
+
+            if cursor.fetchone() is not None:
+                raise ValueError(
+                    "این میز صورتحساب باز دارد و نمی‌توان آن را غیرفعال کرد."
+                )
+
+        cursor.execute("""
+            UPDATE cafe_tables
+            SET is_active = ?
+            WHERE id = ?
+        """, (is_active, table_id))
+
+        if cursor.rowcount == 0:
+            cursor.execute(
+                "SELECT id FROM cafe_tables WHERE id = ?",
+                (table_id,)
+            )
+
+            if cursor.fetchone() is None:
+                raise ValueError("میز پیدا نشد.")
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+
 def get_cafe_tables():
     conn = connect()
 
