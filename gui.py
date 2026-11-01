@@ -1,6 +1,9 @@
-
+import os
+import sys
+import subprocess
+from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from database import (
     get_product,
@@ -22,6 +25,7 @@ from database import (
     get_direct_sale_receipt,
     get_table_receipt,
     get_cafe_settings,
+    initialize_database,
 )
 
 from product_management import ProductManagement
@@ -30,7 +34,7 @@ from receipt import show_receipt_preview, format_receipt
 from database import get_direct_sale_receipt
 from cafe_settings import show_cafe_settings
 from table_management import show_table_management
-
+from database import backup_database
 
 
 class CafePOS:
@@ -165,6 +169,21 @@ class CafePOS:
             width=18
         ).pack(side="right", padx=5)
         
+        
+        ttk.Button(
+            management_row,
+            text="پشتیبان‌گیری",
+            command=self.backup_data,
+            width=18
+        ).pack(side="right", padx=5)
+        
+        
+        ttk.Button(
+            management_row,
+            text="بازیابی اطلاعات",
+            command=self.restore_data,
+            width=18
+        ).pack(side="right", padx=5)
         
         ttk.Button(
             controls,
@@ -1172,8 +1191,134 @@ class CafePOS:
             )
 
             table_button.pack(pady=8)
+ 
+            
+    def backup_data(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="ذخیره نسخه پشتیبان",
+            defaultextension=".db",
+            filetypes=[("SQLite Database", "*.db")],
+            initialfile="CafePOS_Backup.db"
+        )
+
+        if not destination:
+            return
+
+        try:
+            backup_database(destination)
+
+            messagebox.showinfo(
+                "پشتیبان‌گیری",
+                "نسخه پشتیبان با موفقیت ذخیره شد.",
+                parent=self.root
+            )
+
+        except Exception as error:
+            messagebox.showerror(
+                "خطای پشتیبان‌گیری",
+                str(error),
+                parent=self.root
+            )
+
+
+    def restore_data(self):
+        # Prevent restoring during an active cashier session.
+        if get_open_cashier_session() is not None:
+            messagebox.showwarning(
+                "بازیابی اطلاعات",
+                "ابتدا صندوق را ببندید.",
+                parent=self.root
+            )
+            return
+
+        # Prevent losing an unfinished order.
+        if self.cart:
+            messagebox.showwarning(
+                "بازیابی اطلاعات",
+                "ابتدا سبد خرید را خالی کنید.",
+                parent=self.root
+            )
+            return
+
+        # Ask the user to select a backup file.
+        backup_path = filedialog.askopenfilename(
+            parent=self.root,
+            title="انتخاب فایل پشتیبان",
+            filetypes=[("SQLite Database", "*.db")]
+        )
+
+        if not backup_path:
+            return
+
+        # Locate the Restore worker.
+        if getattr(sys, "frozen", False):
+            app_folder = Path(sys.executable).resolve().parent
+            worker_path = app_folder / "CafePOSRestore.exe"
+        else:
+            app_folder = Path(__file__).resolve().parent
+            worker_path = app_folder / "restore_worker.py"
+
+        if not worker_path.is_file():
+            messagebox.showerror(
+                "خطای بازیابی",
+                "برنامه بازیابی اطلاعات پیدا نشد.",
+                parent=self.root
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "تأیید بازیابی اطلاعات",
+            "آیا مطمئن هستید؟\n\n"
+            "اطلاعات فعلی صندوق با اطلاعات فایل پشتیبان جایگزین می‌شود.\n\n"
+            f"فایل انتخاب‌شده:\n{backup_path}\n\n"
+            "برای ادامه، گزینه بله را انتخاب کنید.",
+            parent=self.root,
+            icon="warning"
+        )
+
+        if not confirmed:
+            return
+
+        from database import get_database_path
+
+        database_path = Path(get_database_path()).resolve()
+
+        if getattr(sys, "frozen", False):
+            command = [
+                str(worker_path),
+                str(backup_path),
+                str(database_path),
+                str(os.getpid())
+            ]
+        else:
+            command = [
+                sys.executable,
+                str(worker_path),
+                str(backup_path),
+                str(database_path),
+                str(os.getpid())
+            ]
+
+        try:
+            subprocess.Popen(
+                command,
+                cwd=str(app_folder)
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "خطای بازیابی",
+                f"برنامه بازیابی اجرا نشد:\n{error}",
+                parent=self.root
+            )
+            return
+
+        self.root.destroy()
+        
 
 if __name__ == "__main__":
+    initialize_database()
+    
     root = tk.Tk()
     app = CafePOS(root)
     root.mainloop()

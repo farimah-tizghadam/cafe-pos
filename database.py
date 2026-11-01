@@ -1,10 +1,140 @@
 import sqlite3
+import os
+import tempfile
+import sys
+from pathlib import Path
 from datetime import datetime
 
+
+def get_database_path():
+    if getattr(sys, "frozen", False):
+        # Running as a packaged Windows application
+        app_folder = Path(sys.executable).resolve().parent
+    else:
+        # Running from Python source code
+        app_folder = Path(__file__).resolve().parent
+
+    return app_folder / "cafe.db"
+
+
 def connect():
-    connection = sqlite3.connect("cafe.db")
+    connection = sqlite3.connect(get_database_path())
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+
+def backup_database(destination_path):
+    source_path = get_database_path()
+
+    if source_path.resolve() == Path(destination_path).resolve():
+        raise ValueError("مسیر پشتیبان نباید با پایگاه داده اصلی یکسان باشد.")
+
+    source = connect()
+
+    try:
+        destination = sqlite3.connect(destination_path)
+
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+
+    finally:
+        source.close()
+
+
+
+def restore_database(backup_path):
+    backup_path = Path(backup_path).resolve()
+    database_path = get_database_path().resolve()
+
+    if backup_path == database_path:
+        raise ValueError(
+            "فایل پشتیبان نباید همان پایگاه داده اصلی باشد."
+        )
+
+    if not backup_path.is_file():
+        raise ValueError("فایل پشتیبان پیدا نشد.")
+
+    required_tables = {
+        "products",
+        "orders",
+        "cafe_tables",
+        "table_bills",
+        "cafe_settings",
+    }
+
+    def validate_database(connection):
+        result = connection.execute(
+            "PRAGMA integrity_check"
+        ).fetchone()
+
+        if result is None or result[0] != "ok":
+            raise ValueError("فایل پایگاه داده آسیب دیده است.")
+
+        existing_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+        if not required_tables.issubset(existing_tables):
+            raise ValueError(
+                "این فایل پشتیبان مربوط به صندوق کافه نیست."
+            )
+
+        foreign_keys = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+
+        if foreign_keys:
+            raise ValueError(
+                "اطلاعات فایل پشتیبان ناسازگار است."
+            )
+
+    # Open the backup without allowing changes to it.
+    with sqlite3.connect(
+        backup_path.as_uri() + "?mode=ro",
+        uri=True
+    ) as source:
+
+        validate_database(source)
+
+        # Create a temporary database beside cafe.db.
+        fd, temp_path = tempfile.mkstemp(
+            suffix=".db",
+            dir=database_path.parent
+        )
+        os.close(fd)
+
+        try:
+            # Copy the selected backup into the temporary database.
+            with sqlite3.connect(temp_path) as destination:
+                source.backup(destination)
+
+            # Verify the temporary copy before using it.
+            with sqlite3.connect(temp_path) as restored:
+                validate_database(restored)
+
+            # Create a unique safety backup of current data.
+            timestamp = datetime.now().strftime(
+                "%Y%m%d_%H%M%S_%f"
+            )
+
+            safety_backup = database_path.with_name(
+                f"cafe_before_restore_{timestamp}.db"
+            )
+
+            backup_database(safety_backup)
+
+            # Replace the database only after validation and backup.
+            os.replace(temp_path, database_path)
+
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
 
 def get_session_refunds_by_method(session_id):
@@ -2027,22 +2157,23 @@ def update_cafe_settings(cafe_name, address, phone, receipt_paper_width=80):
         conn.close()
         
 
-create_products_table()
-create_cashier_sessions_table()
-create_order_table()
-create_order_items_table()
-create_cafe_tables()
+def initialize_database():
+    create_products_table()
+    create_cashier_sessions_table()
+    create_order_table()
+    create_order_items_table()
+    create_cafe_tables()
 
-add_bill_id_to_orders()
-add_payment_fields_to_table_bills()
-add_payment_method_to_orders()
-add_payment_method_to_table_bills()
-add_cancellation_fields_to_orders()
-add_cancellation_fields_to_table_bills()
+    add_bill_id_to_orders()
+    add_payment_fields_to_table_bills()
+    add_payment_method_to_orders()
+    add_payment_method_to_table_bills()
+    add_cancellation_fields_to_orders()
+    add_cancellation_fields_to_table_bills()
 
-create_refunds_table()
-add_payment_method_to_refunds()
-add_discount_fields()
+    create_refunds_table()
+    add_payment_method_to_refunds()
+    add_discount_fields()
 
-create_cafe_settings_table()
-add_receipt_paper_width()
+    create_cafe_settings_table()
+    add_receipt_paper_width()
