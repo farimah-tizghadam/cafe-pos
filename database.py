@@ -418,6 +418,28 @@ def create_products_table():
 
 
 
+def add_category_to_products():
+    conn = connect()
+
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(products)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "category" not in columns:
+            cursor.execute("""
+                ALTER TABLE products
+                ADD COLUMN category TEXT NOT NULL DEFAULT 'سایر'
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+
 def get_direct_sale_receipt(order_id):
     conn = connect()
 
@@ -532,7 +554,7 @@ def get_table_receipt(bill_id):
 
 
 
-def add_products(name, price):
+def add_products(name, price, category="سایر"):
     name = name.strip()
 
     if not name:
@@ -562,10 +584,10 @@ def add_products(name, price):
 
         cursor.execute(
             """
-            INSERT INTO products (name, price)
-            VALUES (?, ?)
+            INSERT INTO products (name, price, category)
+            VALUES (?, ?, ?)
             """,
-            (name, price)
+            (name, price, category)
         )
 
         conn.commit()
@@ -591,6 +613,24 @@ def get_product():
     connection.close()
 
     return products
+
+
+
+def get_products_with_categories():
+    connection = connect()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("""
+            SELECT id, name, price, category
+            FROM products
+            WHERE is_active = 1
+            ORDER BY id
+        """)
+        return cursor.fetchall()
+    finally:
+        connection.close()
+        
+        
 
 def update_product_price(product_id, new_price):
     connection = connect()
@@ -2159,6 +2199,7 @@ def update_cafe_settings(cafe_name, address, phone, receipt_paper_width=80):
 
 def initialize_database():
     create_products_table()
+    add_category_to_products()
     create_cashier_sessions_table()
     create_order_table()
     create_order_items_table()

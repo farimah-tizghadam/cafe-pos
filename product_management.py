@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 
 from database import (
     get_product,
+    get_products_with_categories,
     add_products,
     update_product_price,
     delete_product,
@@ -85,13 +86,40 @@ class ProductManagement(tk.Toplevel):
         self.price_entry.grid(
             row=1, column=2, padx=8, pady=8
         )
+        
+        
+        tk.Label(
+            form,
+            text="دسته‌بندی:",
+            font=("Tahoma", 11),
+            bg="white"
+        ).grid(row=2, column=3, padx=8, pady=8)
+
+        self.category_combo = ttk.Combobox(
+            form,
+            font=("Tahoma", 11),
+            justify="right",
+            state="readonly",
+            width=23,
+            values=[
+                "سایر",
+                "قهوه گرم",
+                "نوشیدنی سرد",
+                "چای و دمنوش",
+                "کیک و دسر"
+            ]
+        )
+        self.category_combo.grid(
+            row=2, column=2, padx=8, pady=8
+        )
+        self.category_combo.set("سایر")
 
         ttk.Button(
             form,
             text="افزودن محصول",
             command=self.add_product
         ).grid(
-            row=2,
+            row=3,
             column=2,
             pady=12,
             sticky="e"
@@ -161,14 +189,20 @@ class ProductManagement(tk.Toplevel):
         ).pack(side="left", padx=5)
 
     def refresh_products(self):
-        self.products = get_product()
+        products = get_products_with_categories()
+
+        # Keep the original 3-value tuples for editing and deactivation.
+        self.products = [
+            (product_id, name, price)
+            for product_id, name, price, category in products
+        ]
 
         self.product_list.delete(0, tk.END)
 
-        for product_id, name, price in self.products:
+        for product_id, name, price, category in products:
             self.product_list.insert(
                 tk.END,
-                f"{name} | {price:,} تومان"
+                f"{name} | {price:,} تومان | {category}"
             )
 
     def get_selected_product(self):
@@ -210,6 +244,7 @@ class ProductManagement(tk.Toplevel):
     def add_product(self):
         name = self.name_entry.get().strip()
         price = self.parse_price(self.price_entry)
+        category = self.category_combo.get()
 
         if not name:
             messagebox.showwarning(
@@ -223,7 +258,7 @@ class ProductManagement(tk.Toplevel):
             return
 
         try:
-            add_products(name, price)
+            add_products(name, price, category)
         except Exception as error:
             messagebox.showerror(
                 "خطا",
