@@ -35,6 +35,7 @@ from database import get_direct_sale_receipt
 from cafe_settings import show_cafe_settings
 from table_management import show_table_management
 from database import backup_database
+from menu_export import export_menu_json
 
 
 class CafePOS:
@@ -136,6 +137,13 @@ class CafePOS:
             controls,
             text="مدیریت محصولات",
             command=self.open_product_management
+        ).pack(side="right", padx=5)
+        
+        
+        ttk.Button(
+            controls,
+            text="خروجی منوی دیجیتال",
+            command=self.export_digital_menu
         ).pack(side="right", padx=5)
 
         ttk.Button(
@@ -793,7 +801,26 @@ class CafePOS:
         ProductManagement(
             self.root,
             on_close=self.load_products
-    )        
+    )
+     
+        
+    def export_digital_menu(self):
+        try:
+            output_path = export_menu_json()
+
+            messagebox.showinfo(
+                "منوی دیجیتال",
+                f"فایل منوی دیجیتال با موفقیت ساخته شد:\n{output_path}",
+                parent=self.root
+            )
+
+        except Exception as error:
+            messagebox.showerror(
+                "خطا",
+                f"ساخت فایل منوی دیجیتال ناموفق بود:\n{error}",
+                parent=self.root
+            )        
+
 
     def open_sales_report(self):
         SalesReport(self.root)
