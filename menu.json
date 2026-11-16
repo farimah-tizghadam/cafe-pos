@@ -1,0 +1,67 @@
+{
+  "products": [
+    {
+      "id": 1,
+      "name": "latte",
+      "price": 200000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 3,
+      "name": "cappuccino",
+      "price": 300000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 5,
+      "name": "ice tea",
+      "price": 150000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 6,
+      "name": "matcha",
+      "price": 350000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 7,
+      "name": "tea",
+      "price": 110000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 8,
+      "name": "coffee",
+      "price": 135000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 9,
+      "name": "املت",
+      "price": 350000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 12,
+      "name": "test-123",
+      "price": 200000,
+      "category": "سایر",
+      "available": true
+    },
+    {
+      "id": 13,
+      "name": "چاي",
+      "price": 120000,
+      "category": "چای و دمنوش",
+      "available": true
+    }
+  ]
+}
